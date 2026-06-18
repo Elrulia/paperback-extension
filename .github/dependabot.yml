@@ -1,0 +1,22 @@
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      paperback:
+        patterns:
+          - "@paperback/toolchain"
+          - "@paperback/types"
+          - "@paperback/runtime-polyfills"
+      minor-patch:
+        update-types:
+          - minor
+          - patch
+      major:
+        update-types:
+          - major
