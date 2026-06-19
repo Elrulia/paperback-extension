@@ -117,6 +117,7 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       { id: "LATEST", label: "Latest" },
       { id: "ALPHABET", label: "A-Z" },
       { id: "NEW", label: "New" },
+      { id: "COMPLETED", label: "Completed" },
     ];
   }
 
