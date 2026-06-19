@@ -35,6 +35,36 @@ async function fetchCheerio(url: string) {
   return cheerio.load(Application.arrayBufferToUTF8String(data));
 }
 
+function parseChapterDate(text: string): Date | undefined {
+  const t = text.trim();
+
+  // Absolute: MM-DD-YYYY
+  const abs = t.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (abs) {
+    return new Date(parseInt(abs[3]!), parseInt(abs[1]!) - 1, parseInt(abs[2]!));
+  }
+
+  // Relative: "X hours/days/weeks/months/years ago"
+  const rel = t.match(/^(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago$/i);
+  if (rel) {
+    const n = parseInt(rel[1]!);
+    const unit = rel[2]!.toLowerCase();
+    const msMap: Record<string, number> = {
+      second: 1_000,
+      minute: 60_000,
+      hour: 3_600_000,
+      day: 86_400_000,
+      week: 7 * 86_400_000,
+      month: 30 * 86_400_000,
+      year: 365 * 86_400_000,
+    };
+    const ms = msMap[unit];
+    if (ms !== undefined) return new Date(Date.now() - n * ms);
+  }
+
+  return undefined;
+}
+
 function extractSlug(href: string): string {
   return href
     .replace(/^https?:\/\/mangahub\.io\/manga\//, "")
@@ -320,6 +350,7 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       seen.add(chapterId);
 
       const chapNum = parseFloat(chapterId);
+      const dateText = $(el).find("small.UovLc").text().trim();
       chapters.push({
         chapterId,
         sourceManga,
@@ -327,6 +358,7 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
         chapNum,
         volume: 0,
         sortingIndex: chapNum,
+        publishDate: parseChapterDate(dateText),
       });
     });
 
