@@ -1,5 +1,5 @@
 {
-  "buildTime": "2026-06-19T08:52:21.014Z",
+  "buildTime": "2026-06-19T09:00:04.631Z",
   "builtWith": {
     "toolchain": "1.0.0-alpha.92",
     "types": "1.0.0-alpha.92"
@@ -36,7 +36,7 @@
       "name": "MangaHub",
       "description": "MangaHub.io manga source for Paperback.",
       "version": "1.0.0",
-      "icon": "icon.png",
+      "icon": "static/icon.png",
       "language": "en",
       "contentRating": "SAFE",
       "capabilities": [
