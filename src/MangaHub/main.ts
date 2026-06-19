@@ -45,12 +45,16 @@ function extractSlug(href: string): string {
 function parseMediaMangaItems(
   $: cheerio.CheerioAPI,
   type: "prominentCarouselItem" | "simpleCarouselItem",
+  dedupe = false,
 ): DiscoverSectionItem[] {
   const items: DiscoverSectionItem[] = [];
+  const seen = new Set<string>();
   $(".media-manga").each((_, el) => {
     const titleLink = $(el).find(".media-heading a").first();
     const href = titleLink.attr("href") ?? "";
     const mangaId = extractSlug(href);
+    if (dedupe && seen.has(mangaId)) return;
+    seen.add(mangaId);
     const title = titleLink.clone().children().remove().end().text().trim();
     const img = $(el).find(".media-left img");
     const rawUrl = img.attr("src") ?? img.attr("data-src") ?? "";
@@ -95,16 +99,17 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     section: DiscoverSection,
     metadata: number | undefined,
   ): Promise<PagedResults<DiscoverSectionItem>> {
-    void metadata;
-
     switch (section.id) {
       case "popular": {
         const $ = await fetchCheerio(`${BASE_URL}/popular`);
         return { items: parseMediaMangaItems($, "prominentCarouselItem") };
       }
       case "latest": {
-        const $ = await fetchCheerio(`${BASE_URL}/updates`);
-        return { items: parseMediaMangaItems($, "simpleCarouselItem") };
+        const page = metadata ?? 1;
+        const $ = await fetchCheerio(`${BASE_URL}/updates/page/${page}`);
+        const items = parseMediaMangaItems($, "simpleCarouselItem", true);
+        const hasNext = $("ul.pager li.next").length > 0;
+        return { items, metadata: hasNext ? page + 1 : undefined };
       }
       default:
         return { items: [] };
