@@ -35,7 +35,7 @@ async function fetchCheerio(url: string) {
   return cheerio.load(Application.arrayBufferToUTF8String(data));
 }
 
-function parseChapterDate(text: string): Date | undefined {
+function parseChapterDate(text: string): Date {
   const t = text.trim();
 
   // Absolute: MM-DD-YYYY
@@ -66,7 +66,8 @@ function parseChapterDate(text: string): Date | undefined {
     if (ms !== undefined) return new Date(Date.now() - n * ms);
   }
 
-  return undefined;
+  // Unknown format — almost certainly a "just now" variant; treat as current time
+  return new Date();
 }
 
 function extractSlug(href: string): string {
