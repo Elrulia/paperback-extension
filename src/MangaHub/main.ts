@@ -25,6 +25,7 @@ import type MangaHubConfig from "./pbconfig";
 const BASE_URL = "https://mangahub.io";
 const API_URL = "https://api.mghcdn.com/graphql";
 const IMG_CDN = "https://imgx.mghcdn.com/";
+const NO_COVER = "https://mangahub.io/SharingImage.png";
 
 async function fetchCheerio(url: string) {
   const [, data] = await Application.scheduleRequest({ url, method: "GET" });
@@ -49,8 +50,9 @@ function parseMediaMangaItems(
     const mangaId = extractSlug(href);
     const title = titleLink.clone().children().remove().end().text().trim();
     const img = $(el).find(".media-left img");
-    const imageUrl = img.attr("src") ?? img.attr("data-src") ?? "";
-    if (mangaId && title && imageUrl.startsWith("http")) {
+    const rawUrl = img.attr("src") ?? img.attr("data-src") ?? "";
+    const imageUrl = rawUrl.startsWith("http") ? rawUrl : NO_COVER;
+    if (mangaId && title) {
       items.push({ mangaId, title, imageUrl, type });
     }
   });
@@ -124,9 +126,10 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       const mangaId = extractSlug(href);
       const title = titleLink.clone().children().remove().end().text().trim();
       const img = $(el).find(".media-left img");
-      const imageUrl = img.attr("src") ?? img.attr("data-src") ?? "";
+      const rawUrl = img.attr("src") ?? img.attr("data-src") ?? "";
+      const imageUrl = rawUrl.startsWith("http") ? rawUrl : NO_COVER;
       const subtitle = $(el).find(".media-body span a").first().text().trim();
-      if (mangaId && title && imageUrl.startsWith("http")) {
+      if (mangaId && title) {
         items.push({ mangaId, title, imageUrl, subtitle });
       }
     });
