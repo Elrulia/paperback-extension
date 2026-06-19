@@ -42,6 +42,23 @@ function extractSlug(href: string): string {
     .replace(/\/$/, "");
 }
 
+function parseSliderItems($: cheerio.CheerioAPI): DiscoverSectionItem[] {
+  const items: DiscoverSectionItem[] = [];
+  $(".manga-slider .manga-slide").each((_, el) => {
+    const anchor = $(el).find("a.m-link-overlay").first();
+    const href = anchor.attr("href") ?? "";
+    const mangaId = extractSlug(href);
+    const title = $(el).find("strong a").first().text().trim();
+    const style = $(el).find(".m-slide-background").attr("style") ?? "";
+    const imgMatch = style.match(/url\(([^)]+)\)/);
+    const imageUrl = imgMatch?.[1] ?? NO_COVER;
+    if (mangaId && title) {
+      items.push({ mangaId, title, imageUrl, type: "prominentCarouselItem" });
+    }
+  });
+  return items;
+}
+
 function parseMediaMangaItems(
   $: cheerio.CheerioAPI,
   type: "prominentCarouselItem" | "simpleCarouselItem",
@@ -82,16 +99,11 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
 
   async getDiscoverSections(): Promise<DiscoverSection[]> {
     return [
-      {
-        id: "popular",
-        title: "Popular Manga",
-        type: DiscoverSectionType.prominentCarousel,
-      },
-      {
-        id: "latest",
-        title: "Latest Updates",
-        type: DiscoverSectionType.simpleCarousel,
-      },
+      { id: "popular", title: "Popular Manga", type: DiscoverSectionType.prominentCarousel },
+      { id: "popular-updates", title: "Popular Updates", type: DiscoverSectionType.simpleCarousel },
+      { id: "latest", title: "Latest Updates", type: DiscoverSectionType.simpleCarousel },
+      { id: "new", title: "New Manga", type: DiscoverSectionType.simpleCarousel },
+      { id: "completed", title: "Completed Manga", type: DiscoverSectionType.simpleCarousel },
     ];
   }
 
@@ -99,21 +111,37 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     section: DiscoverSection,
     metadata: number | undefined,
   ): Promise<PagedResults<DiscoverSectionItem>> {
+    const page = metadata ?? 1;
+
+    let url: string;
+    let dedupe = false;
     switch (section.id) {
-      case "popular": {
-        const $ = await fetchCheerio(`${BASE_URL}/popular`);
-        return { items: parseMediaMangaItems($, "prominentCarouselItem") };
+      case "popular":
+        url = `${BASE_URL}/popular/page/${page}`;
+        break;
+      case "popular-updates": {
+        const $ = await fetchCheerio(`${BASE_URL}/`);
+        return { items: parseSliderItems($) };
       }
-      case "latest": {
-        const page = metadata ?? 1;
-        const $ = await fetchCheerio(`${BASE_URL}/updates/page/${page}`);
-        const items = parseMediaMangaItems($, "simpleCarouselItem", true);
-        const hasNext = $("ul.pager li.next").length > 0;
-        return { items, metadata: hasNext ? page + 1 : undefined };
-      }
+      case "latest":
+        url = `${BASE_URL}/updates/page/${page}`;
+        dedupe = true;
+        break;
+      case "new":
+        url = `${BASE_URL}/search/page/${page}?order=NEW&genre=all`;
+        break;
+      case "completed":
+        url = `${BASE_URL}/search/page/${page}?order=COMPLETED`;
+        break;
       default:
         return { items: [] };
     }
+
+    const type = section.id === "popular" ? "prominentCarouselItem" : "simpleCarouselItem";
+    const $ = await fetchCheerio(url);
+    const items = parseMediaMangaItems($, type, dedupe);
+    const hasNext = $("ul.pager li.next").length > 0;
+    return { items, metadata: hasNext ? page + 1 : undefined };
   }
 
   async getSortingOptions(_query: SearchQuery<JSONValue>): Promise<SortingOption[]> {
