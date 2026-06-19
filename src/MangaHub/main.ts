@@ -153,7 +153,8 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       .filter(Boolean);
     // Remove ALL child elements (small alt-titles + span badges like "Hot") to get plain title
     const primaryTitle = h1.clone().children().remove().end().text().trim();
-    const thumbnailUrl = $("img.manga-thumb").first().attr("src") ?? "";
+    const rawThumb = $("img.manga-thumb").first().attr("src") ?? "";
+    const thumbnailUrl = rawThumb.startsWith("http") ? rawThumb : NO_COVER;
 
     const rawSynopsis = $("meta[property='og:description']").attr("content") ?? "";
     const colonIdx = rawSynopsis.indexOf(": ");
