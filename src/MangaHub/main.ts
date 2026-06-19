@@ -118,6 +118,19 @@ function parseMediaMangaItems(
   return items;
 }
 
+const ADULT_GENRES = new Set(["pornographic", "adult", "smut", "r-18", "loli", "shota"]);
+const MATURE_GENRES = new Set(["erotica", "ecchi", "mature", "suggestive", "sexual-violence", "gore", "incest"]);
+
+function deriveContentRating(genreIds: Set<string>): ContentRating {
+  for (const id of genreIds) {
+    if (ADULT_GENRES.has(id)) return ContentRating.ADULT;
+  }
+  for (const id of genreIds) {
+    if (MATURE_GENRES.has(id)) return ContentRating.MATURE;
+  }
+  return ContentRating.EVERYONE;
+}
+
 const PAGE_SIZE = 30;
 
 async function fetchLatestViaApi(page: number): Promise<PagedResults<DiscoverSectionItem>> {
@@ -330,7 +343,7 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
         thumbnailUrl,
         synopsis,
         author,
-        contentRating: ContentRating.EVERYONE,
+        contentRating: deriveContentRating(seenGenres),
         status,
         tagGroups: [genreTagSection],
       },
