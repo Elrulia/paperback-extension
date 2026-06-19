@@ -178,10 +178,10 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
 
   async getDiscoverSections(): Promise<DiscoverSection[]> {
     return [
-      { id: "popular", title: "Popular Manga", type: DiscoverSectionType.prominentCarousel },
-      { id: "popular-updates", title: "Popular Updates", type: DiscoverSectionType.simpleCarousel },
       { id: "latest", title: "Latest Updates", type: DiscoverSectionType.simpleCarousel },
       { id: "new", title: "New Manga", type: DiscoverSectionType.simpleCarousel },
+      { id: "popular", title: "Popular Manga", type: DiscoverSectionType.prominentCarousel },
+      { id: "popular-updates", title: "Popular Updates", type: DiscoverSectionType.simpleCarousel },
       { id: "completed", title: "Completed Manga", type: DiscoverSectionType.simpleCarousel },
     ];
   }
