@@ -4,6 +4,7 @@ import {
   BasicRateLimiter,
   ContentRating,
   DiscoverSectionType,
+  type AdvancedSearchForm,
   type Chapter,
   type ChapterDetails,
   type DiscoverSection,
@@ -19,6 +20,7 @@ import {
 } from "@paperback/types";
 import * as cheerio from "cheerio";
 
+import { MangaHubSearchForm, type MangaHubSearchMetadata } from "./forms";
 import { MainInterceptor } from "./network";
 import type MangaHubConfig from "./pbconfig";
 
@@ -109,15 +111,31 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     }
   }
 
+  async getSortingOptions(_query: SearchQuery<JSONValue>): Promise<SortingOption[]> {
+    return [
+      { id: "POPULAR", label: "Popular" },
+      { id: "LATEST", label: "Latest" },
+      { id: "ALPHABET", label: "A-Z" },
+      { id: "NEW", label: "New" },
+    ];
+  }
+
+  async getAdvancedSearchForm(query: SearchQuery<JSONValue>): Promise<AdvancedSearchForm> {
+    return new MangaHubSearchForm(query as SearchQuery<MangaHubSearchMetadata>);
+  }
+
   async getSearchResults(
     query: SearchQuery<JSONValue>,
     metadata: JSONValue | undefined,
-    _sortingOption?: SortingOption,
+    sortingOption?: SortingOption,
   ): Promise<PagedResults<SearchResultItem>> {
     const page = (metadata as { page?: number } | undefined)?.page ?? 1;
     const q = encodeURIComponent(query.title ?? "");
+    const order = sortingOption?.id ?? "POPULAR";
+    const { genre = "all", status = "both" } =
+      (query.metadata as MangaHubSearchMetadata | undefined) ?? {};
     const $ = await fetchCheerio(
-      `${BASE_URL}/search/page/${page}?q=${q}&order=POPULAR&genre=all&state=all&story_status=both`,
+      `${BASE_URL}/search/page/${page}?q=${q}&order=${order}&genre=${genre}&state=all&story_status=${status}`,
     );
 
     const items: SearchResultItem[] = [];
