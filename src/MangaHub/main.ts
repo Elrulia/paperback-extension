@@ -279,7 +279,12 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
       data?: {
         search?: {
-          rows?: { slug: string; title: string; image: string; latestChapter: number }[];
+          rows?: {
+            slug: string | null;
+            title: string | null;
+            image: string | null;
+            latestChapter: number | null;
+          }[];
           count?: number;
         } | null;
       };
@@ -288,12 +293,18 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     const rows = json.data?.search?.rows ?? [];
     const totalCount = json.data?.search?.count ?? 0;
 
-    const items: SearchResultItem[] = rows.map((row) => ({
-      mangaId: row.slug,
-      title: row.title,
-      imageUrl: row.image.startsWith("http") ? row.image : `https://thumb.mghcdn.com/${row.image}`,
-      subtitle: row.latestChapter >= 0 ? `Ch. ${row.latestChapter}` : undefined,
-    }));
+    const items: SearchResultItem[] = rows
+      .filter((row): row is typeof row & { slug: string; title: string } => !!row.slug && !!row.title)
+      .map((row) => ({
+        mangaId: row.slug,
+        title: row.title,
+        imageUrl: row.image
+          ? row.image.startsWith("http")
+            ? row.image
+            : `https://thumb.mghcdn.com/${row.image}`
+          : NO_COVER,
+        subtitle: row.latestChapter != null && row.latestChapter >= 0 ? `Ch. ${row.latestChapter}` : undefined,
+      }));
 
     const hasNextPage = offset + PAGE_SIZE < totalCount;
     return {
