@@ -288,16 +288,16 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     genre: string,
     offset: number,
   ): Promise<PagedResults<SearchResultItem>> {
-    // Escape/strip characters that Lucene interprets as operators:
-    //   `"` → `\"` (escaped literal quote — tells Lucene to match the `"` character in the title)
-    //   `\` → `\\` (must escape backslashes first)
-    //   `:` → ` ` (field separator — `Life: By` would become field query `Life=By`)
-    //   `~` → ` ` (fuzzy/proximity operator — leading `~word` is invalid Lucene syntax)
-    //   `?` / `*` → ` ` (wildcards)
+    // Prepare query for Lucene (MangaHub's Elasticsearch backend):
+    //   `\` → `\\`  must escape backslashes first
+    //   `"` → `\"`  escaped literal quote — Lucene matches the `"` character in the title
+    //   `:` → ` `   field separator — `Life: By` would become field query `Life=By`
+    //   `?` / `*` → ` `  wildcards (unintended when in a title)
+    //   `~` is left as-is — Elasticsearch handles leading `~` gracefully (confirmed by user testing)
     const sanitizedQ = q
       .replace(/\\/g, "\\\\")
       .replace(/"/g, '\\"')
-      .replace(/[:~?*]/g, " ")
+      .replace(/[:?*]/g, " ")
       .replace(/\s+/g, " ")
       .trim();
 
