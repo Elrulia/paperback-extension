@@ -1,37 +1,14 @@
 {
-  "buildTime": "2026-06-19T09:32:19.562Z",
+  "buildTime": "2026-06-19T09:37:00.763Z",
   "builtWith": {
     "toolchain": "1.0.0-alpha.92",
     "types": "1.0.0-alpha.92"
   },
   "repository": {
-    "name": "Template Extensions (0.9)",
-    "description": "Paperback extensions designed as templates to help developers get started quickly. Maintained by Inkdex."
+    "name": "Elrulia Extensions",
+    "description": "Paperback extensions by Elrulia."
   },
   "sources": [
-    {
-      "name": "Content Template",
-      "description": "Template that shows the functionality of content providing extensions.",
-      "version": "1.0.0-alpha.4",
-      "icon": "icon.png",
-      "language": "en",
-      "contentRating": "SAFE",
-      "capabilities": [
-        32,
-        4,
-        64,
-        1
-      ],
-      "badges": [],
-      "developers": [
-        {
-          "name": "Celarye",
-          "website": "https://celarye.dev",
-          "github": "https://github.com/Celarye"
-        }
-      ],
-      "id": "ContentTemplate"
-    },
     {
       "name": "MangaHub",
       "description": "MangaHub.io manga source for Paperback.",
