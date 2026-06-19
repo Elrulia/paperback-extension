@@ -25,7 +25,8 @@ import type MangaHubConfig from "./pbconfig";
 const BASE_URL = "https://mangahub.io";
 const API_URL = "https://api.mghcdn.com/graphql";
 const IMG_CDN = "https://imgx.mghcdn.com/";
-const NO_COVER = "https://mangahub.io/SharingImage.png";
+const NO_COVER =
+  "https://elrulia.github.io/paperback-extension/0.9/stable/MangaHub/static/no-cover.png";
 
 async function fetchCheerio(url: string) {
   const [, data] = await Application.scheduleRequest({ url, method: "GET" });

@@ -6,7 +6,7 @@ export default {
   name: "MangaHub",
   description: "MangaHub.io manga source for Paperback.",
   version: "1.0.0",
-  icon: "icon.png",
+  icon: "static/icon.png",
   language: "en",
   contentRating: ContentRating.EVERYONE,
   capabilities: [
