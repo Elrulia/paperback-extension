@@ -23,6 +23,8 @@ import { MainInterceptor } from "./network";
 import type MangaHubConfig from "./pbconfig";
 
 const BASE_URL = "https://mangahub.io";
+const API_URL = "https://api.mghcdn.com/graphql";
+const IMG_CDN = "https://imgx.mghcdn.com/";
 
 async function fetchCheerio(url: string) {
   const [, data] = await Application.scheduleRequest({ url, method: "GET" });
@@ -45,7 +47,7 @@ function parseMediaMangaItems(
     const titleLink = $(el).find(".media-heading a").first();
     const href = titleLink.attr("href") ?? "";
     const mangaId = extractSlug(href);
-    const title = titleLink.text().trim();
+    const title = titleLink.clone().children().remove().end().text().trim();
     const img = $(el).find(".media-left img");
     const imageUrl = img.attr("src") ?? img.attr("data-src") ?? "";
     if (mangaId && title && imageUrl.startsWith("http")) {
@@ -120,7 +122,7 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       const titleLink = $(el).find(".media-heading a").first();
       const href = titleLink.attr("href") ?? "";
       const mangaId = extractSlug(href);
-      const title = titleLink.text().trim();
+      const title = titleLink.clone().children().remove().end().text().trim();
       const img = $(el).find(".media-left img");
       const imageUrl = img.attr("src") ?? img.attr("data-src") ?? "";
       const subtitle = $(el).find(".media-body span a").first().text().trim();
@@ -146,7 +148,8 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       .split(";")
       .map((t) => t.trim())
       .filter(Boolean);
-    const primaryTitle = h1.clone().children("small").remove().end().text().trim();
+    // Remove ALL child elements (small alt-titles + span badges like "Hot") to get plain title
+    const primaryTitle = h1.clone().children().remove().end().text().trim();
     const thumbnailUrl = $("img.manga-thumb").first().attr("src") ?? "";
 
     const rawSynopsis = $("meta[property='og:description']").attr("content") ?? "";
@@ -218,6 +221,7 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
         sourceManga,
         langCode: "en",
         chapNum,
+        volume: 0,
         sortingIndex: chapNum,
       });
     });
@@ -226,20 +230,37 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   }
 
   async getChapterDetails(chapter: Chapter): Promise<ChapterDetails> {
-    const url = `${BASE_URL}/chapter/${chapter.sourceManga.mangaId}/chapter-${chapter.chapterId}`;
-    const $ = await fetchCheerio(url);
+    const slug = chapter.sourceManga.mangaId;
+    const num = chapter.chapterId;
 
-    const pages: string[] = [];
-    $("img.PB0mN").each((_, el) => {
-      const src = $(el).attr("src");
-      if (src) pages.push(src);
+    const [, data] = await Application.scheduleRequest({
+      url: API_URL,
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-mhub-access": "00000000-0000-0000-0000-000000000000",
+        origin: BASE_URL,
+      },
+      body: JSON.stringify({
+        query: `{ chapter(x: m01, slug: "${slug}", number: ${num}) { pages } }`,
+      }),
     });
 
-    return {
-      id: chapter.chapterId,
-      mangaId: chapter.sourceManga.mangaId,
-      pages,
+    const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
+      data?: { chapter?: { pages?: string } | null };
     };
+
+    const pagesJson = json.data?.chapter?.pages;
+    const pages: string[] = [];
+
+    if (pagesJson) {
+      const parsed = JSON.parse(pagesJson) as { p: string; i: string[] };
+      for (const img of parsed.i) {
+        pages.push(`${IMG_CDN}${parsed.p}${img}`);
+      }
+    }
+
+    return { id: num, mangaId: slug, pages };
   }
 }
 
