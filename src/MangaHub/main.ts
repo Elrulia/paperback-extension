@@ -118,8 +118,8 @@ function parseMediaMangaItems(
   return items;
 }
 
-const ADULT_GENRES = new Set(["pornographic", "adult", "smut", "r-18", "loli", "shota"]);
-const MATURE_GENRES = new Set(["erotica", "ecchi", "mature", "suggestive", "sexual-violence", "gore", "incest"]);
+const ADULT_GENRES = new Set(["pornographic", "adult", "smut", "r-18"]);
+const MATURE_GENRES = new Set(["erotica", "ecchi", "mature", "suggestive", "sexual-violence", "gore", "incest", "loli", "shota"]);
 
 function deriveContentRating(genreIds: Set<string>): ContentRating {
   for (const id of genreIds) {
@@ -257,35 +257,48 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     metadata: JSONValue | undefined,
     sortingOption?: SortingOption,
   ): Promise<PagedResults<SearchResultItem>> {
-    const page = (metadata as { page?: number } | undefined)?.page ?? 1;
-    const q = encodeURIComponent(query.title ?? "");
+    const offset = (metadata as { offset?: number } | undefined)?.offset ?? 0;
+    const q = (query.title ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
     const order = sortingOption?.id ?? "POPULAR";
-    const { genres = ["all"], status = "both" } =
-      (query.metadata as MangaHubSearchMetadata | undefined) ?? {};
+    const { genres = ["all"] } = (query.metadata as MangaHubSearchMetadata | undefined) ?? {};
     const genreParam = genres.includes("all") ? "all" : genres.join(",");
-    const $ = await fetchCheerio(
-      `${BASE_URL}/search/page/${page}?q=${q}&order=${order}&genre=${genreParam}&state=all&story_status=${status}`,
-    );
 
-    const items: SearchResultItem[] = [];
-    $(".media-manga").each((_, el) => {
-      const titleLink = $(el).find(".media-heading a").first();
-      const href = titleLink.attr("href") ?? "";
-      const mangaId = extractSlug(href);
-      const title = titleLink.clone().children().remove().end().text().trim();
-      const img = $(el).find(".media-left img");
-      const rawUrl = img.attr("src") ?? img.attr("data-src") ?? "";
-      const imageUrl = rawUrl.startsWith("http") ? rawUrl : NO_COVER;
-      const subtitle = $(el).find(".media-body span a").first().text().trim();
-      if (mangaId && title) {
-        items.push({ mangaId, title, imageUrl, subtitle });
-      }
+    const [, data] = await Application.scheduleRequest({
+      url: API_URL,
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-mhub-access": "00000000-0000-0000-0000-000000000000",
+        origin: BASE_URL,
+      },
+      body: JSON.stringify({
+        query: `{ search(x: m01, q: "${q}", alt: true, mod: ${order}, genre: "${genreParam}", count: true, offset: ${offset}) { rows { slug title image latestChapter } count } }`,
+      }),
     });
 
-    const hasNextPage = $("ul.pager li.next").length > 0;
+    const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
+      data?: {
+        search?: {
+          rows?: { slug: string; title: string; image: string; latestChapter: number }[];
+          count?: number;
+        } | null;
+      };
+    };
+
+    const rows = json.data?.search?.rows ?? [];
+    const totalCount = json.data?.search?.count ?? 0;
+
+    const items: SearchResultItem[] = rows.map((row) => ({
+      mangaId: row.slug,
+      title: row.title,
+      imageUrl: row.image.startsWith("http") ? row.image : `https://thumb.mghcdn.com/${row.image}`,
+      subtitle: row.latestChapter >= 0 ? `Ch. ${row.latestChapter}` : undefined,
+    }));
+
+    const hasNextPage = offset + PAGE_SIZE < totalCount;
     return {
       items,
-      metadata: hasNextPage ? { page: page + 1 } : undefined,
+      metadata: hasNextPage ? { offset: offset + PAGE_SIZE } : undefined,
     };
   }
 
