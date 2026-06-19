@@ -83,6 +83,50 @@ function parseMediaMangaItems(
   return items;
 }
 
+const PAGE_SIZE = 30;
+
+async function fetchLatestViaApi(page: number): Promise<PagedResults<DiscoverSectionItem>> {
+  const [, data] = await Application.scheduleRequest({
+    url: API_URL,
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-mhub-access": "00000000-0000-0000-0000-000000000000",
+      origin: BASE_URL,
+    },
+    body: JSON.stringify({
+      query: `{ latest(x: m01, limit: 2000) { id title slug image } }`,
+    }),
+  });
+
+  const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
+    data?: { latest?: { id: number; slug: string; title: string; image: string }[] | null };
+  };
+
+  const all = json.data?.latest ?? [];
+
+  // Deduplicate by database manga ID — same as MangaHub's client-side JS
+  const seenId = new Set<number>();
+  const deduped = all.filter((entry) => {
+    if (seenId.has(entry.id)) return false;
+    seenId.add(entry.id);
+    return true;
+  });
+
+  const offset = (page - 1) * PAGE_SIZE;
+  const pageItems = deduped.slice(offset, offset + PAGE_SIZE);
+  const hasNext = offset + PAGE_SIZE < deduped.length;
+
+  const items: DiscoverSectionItem[] = pageItems.map((entry) => ({
+    mangaId: entry.slug,
+    title: entry.title,
+    imageUrl: entry.image.startsWith("http") ? entry.image : `https://thumb.mghcdn.com/${entry.image}`,
+    type: "simpleCarouselItem" as const,
+  }));
+
+  return { items, metadata: hasNext ? page + 1 : undefined };
+}
+
 export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   mainRateLimiter = new BasicRateLimiter("main", {
     numberOfRequests: 10,
@@ -113,6 +157,10 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   ): Promise<PagedResults<DiscoverSectionItem>> {
     const page = metadata ?? 1;
 
+    if (section.id === "latest") {
+      return fetchLatestViaApi(page);
+    }
+
     let url: string;
     let dedupe = false;
     switch (section.id) {
@@ -123,15 +171,13 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
         const $ = await fetchCheerio(`${BASE_URL}/`);
         return { items: parseSliderItems($) };
       }
-      case "latest":
-        url = `${BASE_URL}/updates/page/${page}`;
-        dedupe = true;
-        break;
       case "new":
         url = `${BASE_URL}/search/page/${page}?order=NEW&genre=all`;
+        dedupe = true;
         break;
       case "completed":
         url = `${BASE_URL}/search/page/${page}?order=COMPLETED`;
+        dedupe = true;
         break;
       default:
         return { items: [] };
