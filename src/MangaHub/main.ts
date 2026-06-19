@@ -262,50 +262,24 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     const { genres = ["all"] } = (query.metadata as MangaHubSearchMetadata | undefined) ?? {};
     const genreParam = genres.includes("all") ? "all" : genres.join(",");
 
-    type SearchMeta = { htmlPage?: number; graphqlOffset?: number };
+    type SearchMeta = { graphqlOffset?: number; htmlPage?: number };
     const meta = metadata as SearchMeta | undefined;
 
-    // If a previous page already switched to GraphQL, stay in GraphQL mode
-    if (meta?.graphqlOffset !== undefined) {
-      return this._searchGraphQL(rawQ, order, genreParam, meta.graphqlOffset);
+    // If we already fell back to HTML on page 1, continue with HTML pagination
+    if (meta?.htmlPage !== undefined) {
+      return this._searchHTML(rawQ, order, genreParam, meta.htmlPage);
     }
 
-    // Primary: HTML search (handles full titles with : , ' correctly via URL encoding)
-    const htmlPage = meta?.htmlPage ?? 1;
-    const htmlResult = await this._searchHTML(rawQ, order, genreParam, htmlPage);
+    // Primary: GraphQL (handles titles with ' " ~ : via alt:true + Lucene operator stripping)
+    const graphqlOffset = meta?.graphqlOffset ?? 0;
+    const graphqlResult = await this._searchGraphQL(rawQ, order, genreParam, graphqlOffset);
 
-    // If HTML found results, or we're paginating through HTML results, return them
-    if (htmlResult.items.length > 0 || htmlPage > 1) {
-      return htmlResult;
+    if (graphqlResult.items.length > 0 || graphqlOffset > 0) {
+      return graphqlResult;
     }
 
-    // HTML returned 0 on page 1 — fall back to GraphQL (handles special-char titles like "Notorious 'Talker'")
-    return this._searchGraphQL(rawQ, order, genreParam, 0);
-  }
-
-  private async _searchHTML(
-    q: string,
-    order: string,
-    genre: string,
-    page: number,
-  ): Promise<PagedResults<SearchResultItem>> {
-    const $ = await fetchCheerio(
-      `${BASE_URL}/search/page/${page}?q=${encodeURIComponent(q)}&order=${order}&genre=${genre}&state=all`,
-    );
-    const items: SearchResultItem[] = [];
-    $(".media-manga").each((_, el) => {
-      const titleLink = $(el).find(".media-heading a").first();
-      const href = titleLink.attr("href") ?? "";
-      const mangaId = extractSlug(href);
-      const title = titleLink.clone().children().remove().end().text().trim();
-      const img = $(el).find(".media-left img");
-      const rawUrl = img.attr("src") ?? img.attr("data-src") ?? "";
-      const imageUrl = rawUrl.startsWith("http") ? rawUrl : NO_COVER;
-      const subtitle = $(el).find(".media-body span a").first().text().trim();
-      if (mangaId && title) items.push({ mangaId, title, imageUrl, subtitle });
-    });
-    const hasNext = $("ul.pager li.next").length > 0;
-    return { items, metadata: hasNext ? { htmlPage: page + 1 } : undefined };
+    // GraphQL returned 0 on page 1 — fall back to HTML
+    return this._searchHTML(rawQ, order, genreParam, 1);
   }
 
   private async _searchGraphQL(
@@ -314,11 +288,16 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     genre: string,
     offset: number,
   ): Promise<PagedResults<SearchResultItem>> {
-    // Strip Lucene field-separator `:` to prevent the search backend from misinterpreting title queries
-    const escapedQ = q
+    // Escape/strip characters that Lucene interprets as operators:
+    //   `"` → `\"` (escaped literal quote — tells Lucene to match the `"` character in the title)
+    //   `\` → `\\` (must escape backslashes first)
+    //   `:` → ` ` (field separator — `Life: By` would become field query `Life=By`)
+    //   `~` → ` ` (fuzzy/proximity operator — leading `~word` is invalid Lucene syntax)
+    //   `?` / `*` → ` ` (wildcards)
+    const sanitizedQ = q
       .replace(/\\/g, "\\\\")
       .replace(/"/g, '\\"')
-      .replace(/:/g, " ")
+      .replace(/[:~?*]/g, " ")
       .replace(/\s+/g, " ")
       .trim();
 
@@ -331,7 +310,7 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
         origin: BASE_URL,
       },
       body: JSON.stringify({
-        query: `{ search(x: m01, q: "${escapedQ}", alt: true, mod: ${order}, genre: "${genre}", count: true, offset: ${offset}) { rows { slug title image latestChapter } count } }`,
+        query: `{ search(x: m01, q: "${sanitizedQ}", alt: true, mod: ${order}, genre: "${genre}", count: true, offset: ${offset}) { rows { slug title image latestChapter } count } }`,
       }),
     });
 
@@ -361,6 +340,31 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
 
     const hasNextPage = offset + PAGE_SIZE < totalCount;
     return { items, metadata: hasNextPage ? { graphqlOffset: offset + PAGE_SIZE } : undefined };
+  }
+
+  private async _searchHTML(
+    q: string,
+    order: string,
+    genre: string,
+    page: number,
+  ): Promise<PagedResults<SearchResultItem>> {
+    const $ = await fetchCheerio(
+      `${BASE_URL}/search/page/${page}?q=${encodeURIComponent(q)}&order=${order}&genre=${genre}&state=all`,
+    );
+    const items: SearchResultItem[] = [];
+    $(".media-manga").each((_, el) => {
+      const titleLink = $(el).find(".media-heading a").first();
+      const href = titleLink.attr("href") ?? "";
+      const mangaId = extractSlug(href);
+      const title = titleLink.clone().children().remove().end().text().trim();
+      const img = $(el).find(".media-left img");
+      const rawUrl = img.attr("src") ?? img.attr("data-src") ?? "";
+      const imageUrl = rawUrl.startsWith("http") ? rawUrl : NO_COVER;
+      const subtitle = $(el).find(".media-body span a").first().text().trim();
+      if (mangaId && title) items.push({ mangaId, title, imageUrl, subtitle });
+    });
+    const hasNext = $("ul.pager li.next").length > 0;
+    return { items, metadata: hasNext ? { htmlPage: page + 1 } : undefined };
   }
 
   async getMangaDetails(mangaId: string): Promise<SourceManga> {
