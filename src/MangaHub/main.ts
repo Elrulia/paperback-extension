@@ -46,8 +46,9 @@ function parseMediaMangaItems(
     const href = titleLink.attr("href") ?? "";
     const mangaId = extractSlug(href);
     const title = titleLink.text().trim();
-    const imageUrl = $(el).find(".media-left img").attr("src") ?? "";
-    if (mangaId && title) {
+    const img = $(el).find(".media-left img");
+    const imageUrl = img.attr("src") ?? img.attr("data-src") ?? "";
+    if (mangaId && title && imageUrl.startsWith("http")) {
       items.push({ mangaId, title, imageUrl, type });
     }
   });
@@ -120,9 +121,10 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       const href = titleLink.attr("href") ?? "";
       const mangaId = extractSlug(href);
       const title = titleLink.text().trim();
-      const imageUrl = $(el).find(".media-left img").attr("src") ?? "";
+      const img = $(el).find(".media-left img");
+      const imageUrl = img.attr("src") ?? img.attr("data-src") ?? "";
       const subtitle = $(el).find(".media-body span a").first().text().trim();
-      if (mangaId && title) {
+      if (mangaId && title && imageUrl.startsWith("http")) {
         items.push({ mangaId, title, imageUrl, subtitle });
       }
     });
@@ -137,7 +139,14 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   async getMangaDetails(mangaId: string): Promise<SourceManga> {
     const $ = await fetchCheerio(`${BASE_URL}/manga/${mangaId}`);
 
-    const primaryTitle = $("h1").first().text().trim();
+    const h1 = $("h1").first();
+    const secondaryTitles = h1
+      .find("small")
+      .text()
+      .split(";")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    const primaryTitle = h1.clone().children("small").remove().end().text().trim();
     const thumbnailUrl = $("img.manga-thumb").first().attr("src") ?? "";
 
     const rawSynopsis = $("meta[property='og:description']").attr("content") ?? "";
@@ -175,7 +184,7 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       mangaId,
       mangaInfo: {
         primaryTitle,
-        secondaryTitles: [],
+        secondaryTitles,
         thumbnailUrl,
         synopsis,
         author,
