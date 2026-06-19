@@ -257,100 +257,17 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     metadata: JSONValue | undefined,
     sortingOption?: SortingOption,
   ): Promise<PagedResults<SearchResultItem>> {
-    const rawQ = query.title ?? "";
+    const page = (metadata as { page?: number } | undefined)?.page ?? 1;
+    // Escape `"` → `\"` so MangaHub's search backend matches literal quote chars in titles
+    const q = encodeURIComponent((query.title ?? "").replace(/"/g, '\\"'));
     const order = sortingOption?.id ?? "POPULAR";
     const { genres = ["all"] } = (query.metadata as MangaHubSearchMetadata | undefined) ?? {};
     const genreParam = genres.includes("all") ? "all" : genres.join(",");
 
-    type SearchMeta = { graphqlOffset?: number; htmlPage?: number };
-    const meta = metadata as SearchMeta | undefined;
-
-    // If we already fell back to HTML on page 1, continue with HTML pagination
-    if (meta?.htmlPage !== undefined) {
-      return this._searchHTML(rawQ, order, genreParam, meta.htmlPage);
-    }
-
-    // Primary: GraphQL (handles titles with ' " ~ : via alt:true + Lucene operator stripping)
-    const graphqlOffset = meta?.graphqlOffset ?? 0;
-    const graphqlResult = await this._searchGraphQL(rawQ, order, genreParam, graphqlOffset);
-
-    if (graphqlResult.items.length > 0 || graphqlOffset > 0) {
-      return graphqlResult;
-    }
-
-    // GraphQL returned 0 on page 1 — fall back to HTML
-    return this._searchHTML(rawQ, order, genreParam, 1);
-  }
-
-  private async _searchGraphQL(
-    q: string,
-    order: string,
-    genre: string,
-    offset: number,
-  ): Promise<PagedResults<SearchResultItem>> {
-    // Prepare query for Lucene (MangaHub's Elasticsearch backend):
-    //   `\` → `\\`  must escape backslashes first
-    //   `"` → `\"`  escaped literal quote — Lucene matches the `"` character in the title
-    //   `:` → ` `   field separator — `Life: By` would become field query `Life=By`
-    //   `?` / `*` → ` `  wildcards (unintended when in a title)
-    //   `~` is left as-is — Elasticsearch handles leading `~` gracefully (confirmed by user testing)
-    const sanitizedQ = q
-      .replace(/\\/g, "\\\\")
-      .replace(/"/g, '\\"')
-      .replace(/[:?*]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    const [, data] = await Application.scheduleRequest({
-      url: API_URL,
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-mhub-access": "00000000-0000-0000-0000-000000000000",
-        origin: BASE_URL,
-      },
-      body: JSON.stringify({
-        query: `{ search(x: m01, q: "${sanitizedQ}", alt: true, mod: ${order}, genre: "${genre}", count: true, offset: ${offset}) { rows { slug title image latestChapter } count } }`,
-      }),
-    });
-
-    const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
-      data?: {
-        search?: {
-          rows?: { slug: string | null; title: string | null; image: string | null; latestChapter: number | null }[];
-          count?: number;
-        } | null;
-      };
-    };
-
-    const rows = json.data?.search?.rows ?? [];
-    const totalCount = json.data?.search?.count ?? 0;
-    const items: SearchResultItem[] = rows
-      .filter((row): row is typeof row & { slug: string; title: string } => !!row.slug && !!row.title)
-      .map((row) => ({
-        mangaId: row.slug,
-        title: row.title,
-        imageUrl: row.image
-          ? row.image.startsWith("http")
-            ? row.image
-            : `https://thumb.mghcdn.com/${row.image}`
-          : NO_COVER,
-        subtitle: row.latestChapter != null && row.latestChapter >= 0 ? `Ch. ${row.latestChapter}` : undefined,
-      }));
-
-    const hasNextPage = offset + PAGE_SIZE < totalCount;
-    return { items, metadata: hasNextPage ? { graphqlOffset: offset + PAGE_SIZE } : undefined };
-  }
-
-  private async _searchHTML(
-    q: string,
-    order: string,
-    genre: string,
-    page: number,
-  ): Promise<PagedResults<SearchResultItem>> {
     const $ = await fetchCheerio(
-      `${BASE_URL}/search/page/${page}?q=${encodeURIComponent(q)}&order=${order}&genre=${genre}&state=all`,
+      `${BASE_URL}/search/page/${page}?q=${q}&order=${order}&genre=${genreParam}&state=all`,
     );
+
     const items: SearchResultItem[] = [];
     $(".media-manga").each((_, el) => {
       const titleLink = $(el).find(".media-heading a").first();
@@ -363,8 +280,9 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       const subtitle = $(el).find(".media-body span a").first().text().trim();
       if (mangaId && title) items.push({ mangaId, title, imageUrl, subtitle });
     });
-    const hasNext = $("ul.pager li.next").length > 0;
-    return { items, metadata: hasNext ? { htmlPage: page + 1 } : undefined };
+
+    const hasNextPage = $("ul.pager li.next").length > 0;
+    return { items, metadata: hasNextPage ? { page: page + 1 } : undefined };
   }
 
   async getMangaDetails(mangaId: string): Promise<SourceManga> {
