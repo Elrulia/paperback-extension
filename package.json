@@ -1,7 +1,7 @@
 {
-  "name": "Template Extensions (0.9)",
+  "name": "Elrulia Extensions",
   "private": true,
-  "description": "Paperback extensions designed as templates to help developers get started quickly. Maintained by Inkdex.",
+  "description": "Paperback extensions by Elrulia.",
   "type": "module",
   "scripts": {
     "tsc": "tsc",
