@@ -257,11 +257,70 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     metadata: JSONValue | undefined,
     sortingOption?: SortingOption,
   ): Promise<PagedResults<SearchResultItem>> {
-    const offset = (metadata as { offset?: number } | undefined)?.offset ?? 0;
-    const q = (query.title ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const rawQ = query.title ?? "";
     const order = sortingOption?.id ?? "POPULAR";
     const { genres = ["all"] } = (query.metadata as MangaHubSearchMetadata | undefined) ?? {};
     const genreParam = genres.includes("all") ? "all" : genres.join(",");
+
+    type SearchMeta = { htmlPage?: number; graphqlOffset?: number };
+    const meta = metadata as SearchMeta | undefined;
+
+    // If a previous page already switched to GraphQL, stay in GraphQL mode
+    if (meta?.graphqlOffset !== undefined) {
+      return this._searchGraphQL(rawQ, order, genreParam, meta.graphqlOffset);
+    }
+
+    // Primary: HTML search (handles full titles with : , ' correctly via URL encoding)
+    const htmlPage = meta?.htmlPage ?? 1;
+    const htmlResult = await this._searchHTML(rawQ, order, genreParam, htmlPage);
+
+    // If HTML found results, or we're paginating through HTML results, return them
+    if (htmlResult.items.length > 0 || htmlPage > 1) {
+      return htmlResult;
+    }
+
+    // HTML returned 0 on page 1 — fall back to GraphQL (handles special-char titles like "Notorious 'Talker'")
+    return this._searchGraphQL(rawQ, order, genreParam, 0);
+  }
+
+  private async _searchHTML(
+    q: string,
+    order: string,
+    genre: string,
+    page: number,
+  ): Promise<PagedResults<SearchResultItem>> {
+    const $ = await fetchCheerio(
+      `${BASE_URL}/search/page/${page}?q=${encodeURIComponent(q)}&order=${order}&genre=${genre}&state=all`,
+    );
+    const items: SearchResultItem[] = [];
+    $(".media-manga").each((_, el) => {
+      const titleLink = $(el).find(".media-heading a").first();
+      const href = titleLink.attr("href") ?? "";
+      const mangaId = extractSlug(href);
+      const title = titleLink.clone().children().remove().end().text().trim();
+      const img = $(el).find(".media-left img");
+      const rawUrl = img.attr("src") ?? img.attr("data-src") ?? "";
+      const imageUrl = rawUrl.startsWith("http") ? rawUrl : NO_COVER;
+      const subtitle = $(el).find(".media-body span a").first().text().trim();
+      if (mangaId && title) items.push({ mangaId, title, imageUrl, subtitle });
+    });
+    const hasNext = $("ul.pager li.next").length > 0;
+    return { items, metadata: hasNext ? { htmlPage: page + 1 } : undefined };
+  }
+
+  private async _searchGraphQL(
+    q: string,
+    order: string,
+    genre: string,
+    offset: number,
+  ): Promise<PagedResults<SearchResultItem>> {
+    // Strip Lucene field-separator `:` to prevent the search backend from misinterpreting title queries
+    const escapedQ = q
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+      .replace(/:/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
 
     const [, data] = await Application.scheduleRequest({
       url: API_URL,
@@ -272,19 +331,14 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
         origin: BASE_URL,
       },
       body: JSON.stringify({
-        query: `{ search(x: m01, q: "${q}", alt: true, mod: ${order}, genre: "${genreParam}", count: true, offset: ${offset}) { rows { slug title image latestChapter } count } }`,
+        query: `{ search(x: m01, q: "${escapedQ}", alt: true, mod: ${order}, genre: "${genre}", count: true, offset: ${offset}) { rows { slug title image latestChapter } count } }`,
       }),
     });
 
     const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
       data?: {
         search?: {
-          rows?: {
-            slug: string | null;
-            title: string | null;
-            image: string | null;
-            latestChapter: number | null;
-          }[];
+          rows?: { slug: string | null; title: string | null; image: string | null; latestChapter: number | null }[];
           count?: number;
         } | null;
       };
@@ -292,7 +346,6 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
 
     const rows = json.data?.search?.rows ?? [];
     const totalCount = json.data?.search?.count ?? 0;
-
     const items: SearchResultItem[] = rows
       .filter((row): row is typeof row & { slug: string; title: string } => !!row.slug && !!row.title)
       .map((row) => ({
@@ -307,10 +360,7 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       }));
 
     const hasNextPage = offset + PAGE_SIZE < totalCount;
-    return {
-      items,
-      metadata: hasNextPage ? { offset: offset + PAGE_SIZE } : undefined,
-    };
+    return { items, metadata: hasNextPage ? { graphqlOffset: offset + PAGE_SIZE } : undefined };
   }
 
   async getMangaDetails(mangaId: string): Promise<SourceManga> {
