@@ -132,10 +132,11 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     const page = (metadata as { page?: number } | undefined)?.page ?? 1;
     const q = encodeURIComponent(query.title ?? "");
     const order = sortingOption?.id ?? "POPULAR";
-    const { genre = "all", status = "both" } =
+    const { genres = ["all"], status = "both" } =
       (query.metadata as MangaHubSearchMetadata | undefined) ?? {};
+    const genreParam = genres.includes("all") ? "all" : genres.join(",");
     const $ = await fetchCheerio(
-      `${BASE_URL}/search/page/${page}?q=${q}&order=${order}&genre=${genre}&state=all&story_status=${status}`,
+      `${BASE_URL}/search/page/${page}?q=${q}&order=${order}&genre=${genreParam}&state=all&story_status=${status}`,
     );
 
     const items: SearchResultItem[] = [];
