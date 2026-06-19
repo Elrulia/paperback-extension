@@ -44,6 +44,10 @@ function parseChapterDate(text: string): Date | undefined {
     return new Date(parseInt(abs[3]!), parseInt(abs[1]!) - 1, parseInt(abs[2]!));
   }
 
+  if (/^today$/i.test(t)) return new Date();
+  if (/^yesterday$/i.test(t)) return new Date(Date.now() - 86_400_000);
+  if (/^less than/i.test(t)) return new Date();
+
   // Relative: "X hours/days/weeks/months/years ago"
   const rel = t.match(/^(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago$/i);
   if (rel) {
