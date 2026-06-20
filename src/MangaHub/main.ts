@@ -15,6 +15,7 @@ import {
   type ExtensionImpl,
   type JSONValue,
   type PagedResults,
+  type Request,
   type SearchQuery,
   type SearchResultItem,
   type SortingOption,
@@ -154,10 +155,17 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   }
 
   // Paperback calls this after the user completes the WebView bypass session.
-  async saveCloudflareBypassCookies(cookies: Cookie[]): Promise<void> {
+  async cloudflareBypassCompleted(_request: Request, cookies: Cookie[], localStorage: Record<string, string>): Promise<void> {
+    const mhubFromCookie = cookies.find((c) => c.name === "mhub_access")?.value;
+    const mhubFromStorage = localStorage["mhub_access"];
+    const mhubValue = mhubFromCookie ?? mhubFromStorage;
+
     const names = cookies.map((c) => c.name).join(",");
-    const mhub = cookies.find((c) => c.name === "mhub_access");
-    Application.setState(`cookies=[${names}] mhub=${mhub?.value?.slice(0, 8) ?? "NOT_FOUND"}`, "bypassDebug");
+    const lsKeys = Object.keys(localStorage).join(",");
+    Application.setState(
+      `cookies=[${names}] mhub_cookie=${mhubFromCookie?.slice(0, 8) ?? "NO"} mhub_ls=${mhubFromStorage?.slice(0, 8) ?? "NO"} ls=[${lsKeys}]`,
+      "bypassDebug",
+    );
 
     for (const cookie of cookies) {
       try {
@@ -168,9 +176,9 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     }
     for (const cookie of cookies) {
       this.cookieStorageInterceptor.setCookie(cookie);
-      if (cookie.name === "mhub_access" && cookie.value) {
-        Application.setState(cookie.value, "mhubToken");
-      }
+    }
+    if (mhubValue) {
+      Application.setState(mhubValue, "mhubToken");
     }
   }
 
