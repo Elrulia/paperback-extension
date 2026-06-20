@@ -137,7 +137,7 @@ function deriveContentRating(genreIds: Set<string>): ContentRating {
 export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   mainRateLimiter = new BasicRateLimiter("main", {
     numberOfRequests: 2,
-    bufferInterval: 8,
+    bufferInterval: 20,
     ignoreImages: true,
   });
 
@@ -225,10 +225,9 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     return { items, metadata: hasNext ? page + 1 : undefined };
   }
 
-  // Fetches up to 2000 recent entries from the API, deduplicates by numeric manga
-  // id (matching MangaHub's own client-side logic), then paginates locally.
   async fetchLatestViaApi(page: number): Promise<PagedResults<DiscoverSectionItem>> {
     const token = this.getMhubToken();
+    const offset = (page - 1) * 30;
 
     const [, data] = await Application.scheduleRequest({
       url: API_URL,
@@ -240,36 +239,24 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
         origin: BASE_URL,
       },
       body: JSON.stringify({
-        query: `{ latest(x: m01, limit: 2000) { id title slug image } }`,
+        query: `{ search(x: m01, q: "", genre: "all", mod: LATEST, offset: ${offset}) { rows { slug title image } } }`,
       }),
     });
 
     const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
-      data?: { latest?: { id: number; slug: string; title: string; image: string }[] | null };
+      data?: { search?: { rows?: { slug: string; title: string; image: string }[] } | null };
     };
 
-    const all = json.data?.latest ?? [];
+    const rows = json.data?.search?.rows ?? [];
 
-    const seenId = new Set<number>();
-    const deduped = all.filter((entry) => {
-      if (seenId.has(entry.id)) return false;
-      seenId.add(entry.id);
-      return true;
-    });
-
-    const PAGE_SIZE = 30;
-    const offset = (page - 1) * PAGE_SIZE;
-    const pageItems = deduped.slice(offset, offset + PAGE_SIZE);
-    const hasNext = offset + PAGE_SIZE < deduped.length;
-
-    const items: DiscoverSectionItem[] = pageItems.map((entry) => ({
+    const items: DiscoverSectionItem[] = rows.map((entry) => ({
       mangaId: entry.slug,
       title: entry.title,
       imageUrl: entry.image.startsWith("http") ? entry.image : `${THUMB_CDN}${entry.image}`,
       type: "simpleCarouselItem" as const,
     }));
 
-    return { items, metadata: hasNext ? page + 1 : undefined };
+    return { items, metadata: rows.length >= 30 ? page + 1 : undefined };
   }
 
   async getSortingOptions(_query: SearchQuery<JSONValue>): Promise<SortingOption[]> {
