@@ -2,7 +2,6 @@
 
 import {
   BasicRateLimiter,
-  CloudflareError,
   ContentRating,
   CookieStorageInterceptor,
   DiscoverSectionType,
@@ -145,40 +144,33 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   cookieStorageInterceptor = new CookieStorageInterceptor({ storage: "stateManager" });
   mainInterceptor = new MainInterceptor("main");
 
+  private accessKey = "";
+
   async initialise(): Promise<void> {
     this.mainRateLimiter.registerInterceptor();
     this.cookieStorageInterceptor.registerInterceptor();
     this.mainInterceptor.registerInterceptor();
-    // Eagerly refresh the token on startup so chapter loads don't start with
-    // the null GUID fallback (which exhausts its rate limit in ~1 chapter).
-    //void this.refreshMhubToken();
+    const stored = Application.getState("mhubToken");
+    if (typeof stored === "string" && stored.length > 0) {
+      this.accessKey = stored;
+    }
   }
 
-  // Paperback calls this after the user completes the WebView bypass session.
-  async cloudflareBypassCompleted(_request: Request, cookies: Cookie[], localStorage: Record<string, string>): Promise<void> {
-    const mhubFromCookie = cookies.find((c) => c.name === "mhub_access")?.value;
-    const mhubFromStorage = localStorage["mhub_access"];
-    const mhubValue = mhubFromCookie ?? mhubFromStorage;
-
-    const names = cookies.map((c) => c.name).join(",");
-    const lsKeys = Object.keys(localStorage).join(",");
-    Application.setState(
-      `cookies=[${names}] mhub_cookie=${mhubFromCookie?.slice(0, 8) ?? "NO"} mhub_ls=${mhubFromStorage?.slice(0, 8) ?? "NO"} ls=[${lsKeys}]`,
-      "bypassDebug",
-    );
-
-    for (const cookie of cookies) {
+  async cloudflareBypassCompleted(_request: Request, cookies: Cookie[], _localStorage: Record<string, string>): Promise<void> {
+    for (const cookie of this.cookieStorageInterceptor.cookies) {
       try {
         this.cookieStorageInterceptor.deleteCookie(cookie);
       } catch {
-        // some bypass cookies may lack domain
+        // ignore cookies without domain
       }
     }
     for (const cookie of cookies) {
+      if (cookie.expires && cookie.expires.getTime() <= Date.now()) continue;
       this.cookieStorageInterceptor.setCookie(cookie);
-    }
-    if (mhubValue) {
-      Application.setState(mhubValue, "mhubToken");
+      if (cookie.name === "mhub_access" && cookie.value) {
+        this.accessKey = cookie.value;
+        Application.setState(cookie.value, "mhubToken");
+      }
     }
   }
 
@@ -235,7 +227,7 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   // Fetches up to 2000 recent entries from the API, deduplicates by numeric manga
   // id (matching MangaHub's own client-side logic), then paginates locally.
   async fetchLatestViaApi(page: number): Promise<PagedResults<DiscoverSectionItem>> {
-    const token = await this.getMhubToken();
+    const token = this.getMhubToken();
 
     const [, data] = await Application.scheduleRequest({
       url: API_URL,
@@ -417,26 +409,36 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     return chapters;
   }
 
-  async getMhubToken(): Promise<string> {
-    return (Application.getState("mhubToken") as string | undefined) ?? "00000000-0000-0000-0000-000000000000";
+  getMhubToken(): string {
+    return this.accessKey || "00000000-0000-0000-0000-000000000000";
   }
 
-  // Mirrors 0.8's refreshAPIKey(): delete the stale mhub_access cookie so the
-  // server issues a fresh one, then GET mangahub.io. Paperback populates
-  // response.cookies from Set-Cookie before passing to interceptors, so
-  // interceptResponse captures the new token automatically.
   async refreshMhubToken(): Promise<void> {
-    const old = this.cookieStorageInterceptor.cookiesForUrl(`${BASE_URL}/`).find((c) => c.name === "mhub_access");
-    if (old) this.cookieStorageInterceptor.deleteCookie(old);
-    Application.setState(undefined, "mhubToken");
-    // Send mhub_access="" (empty) to mirror 0.8's refreshAPIKey() which sends
-    // Cookie: mhub_access=; Max-Age=0 — an expired/empty cookie signals the
-    // server to issue a fresh token rather than renewing the same session.
-    await Application.scheduleRequest({
-      url: `${BASE_URL}/`,
+    const random = Math.floor(Math.random() * 2000) + 1000;
+    const [response] = await Application.scheduleRequest({
+      url: `${BASE_URL}/chapter/martial-peak/chapter-${random}`,
       method: "GET",
-      cookies: { mhub_access: "" },
     });
+
+    let key = "";
+    for (const cookie of response.cookies ?? []) {
+      if (cookie.name === "mhub_access" && cookie.value) {
+        key = cookie.value;
+        break;
+      }
+    }
+    if (!key) {
+      for (const cookie of this.cookieStorageInterceptor.cookies) {
+        if (cookie.name === "mhub_access" && cookie.value) {
+          key = cookie.value;
+          break;
+        }
+      }
+    }
+    if (key) {
+      this.accessKey = key;
+      Application.setState(key, "mhubToken");
+    }
   }
 
   async getChapterDetails(chapter: Chapter): Promise<ChapterDetails> {
@@ -464,21 +466,15 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       return { pages: json.data?.chapter?.pages, errMsg: json.errors?.[0]?.message };
     };
 
-    let result = await fetchPages(await this.getMhubToken());
+    let result = await fetchPages(this.getMhubToken());
 
     if (result.errMsg) {
-      // First attempt failed. Try a silent token refresh (mirrors 0.8 refreshAPIKey)
-      // before falling back to the user-visible bypass dialog.
       await this.refreshMhubToken();
-      result = await fetchPages(await this.getMhubToken());
+      result = await fetchPages(this.getMhubToken());
     }
 
     if (result.errMsg) {
-      const bypassDebug = (Application.getState("bypassDebug") as string | undefined) ?? "bypass_not_called_yet";
-      throw new CloudflareError(
-        { url: `${BASE_URL}/chapter/${slug}/chapter-${num}?reloadKey=1`, method: "GET" },
-        `${result.errMsg} | token=${(await this.getMhubToken()).slice(0, 8)} | ${bypassDebug}`,
-      );
+      throw new Error(result.errMsg);
     }
 
     const pages: string[] = [];
