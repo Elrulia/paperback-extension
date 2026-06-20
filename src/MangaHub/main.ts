@@ -2,12 +2,14 @@
 
 import {
   BasicRateLimiter,
+  CloudflareError,
   ContentRating,
   CookieStorageInterceptor,
   DiscoverSectionType,
   type AdvancedSearchForm,
   type Chapter,
   type ChapterDetails,
+  type Cookie,
   type DiscoverSection,
   type DiscoverSectionItem,
   type ExtensionImpl,
@@ -22,7 +24,7 @@ import {
 import * as cheerio from "cheerio";
 
 import { MangaHubSearchForm, type MangaHubSearchMetadata } from "./forms";
-import { MainInterceptor } from "./network";
+import { MainInterceptor, MANGAHUB_DOMAIN } from "./network";
 import type MangaHubConfig from "./pbconfig";
 
 const BASE_URL = "https://mangahub.io";
@@ -153,6 +155,23 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     this.mainRateLimiter.registerInterceptor();
     this.cookieStorageInterceptor.registerInterceptor();
     this.mainInterceptor.registerInterceptor();
+  }
+
+  // Paperback calls this after the user completes the WebView bypass session.
+  // Store all CF-related cookies so CookieStorageInterceptor sends them on API requests.
+  async saveCloudflareBypassCookies(cookies: Cookie[]): Promise<void> {
+    for (const cookie of cookies) {
+      this.cookieStorageInterceptor.deleteCookie(cookie);
+    }
+    for (const cookie of cookies) {
+      if (
+        cookie.name.startsWith("cf") ||
+        cookie.name.startsWith("_cf") ||
+        cookie.name.startsWith("__cf")
+      ) {
+        this.cookieStorageInterceptor.setCookie(cookie);
+      }
+    }
   }
 
   async getDiscoverSections(): Promise<DiscoverSection[]> {
@@ -371,7 +390,15 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     };
 
     const errMsg = json.errors?.[0]?.message;
-    if (errMsg) throw new Error(errMsg);
+    if (errMsg) {
+      // MangaHub rate-limits unauthenticated API access and tells users to visit the site.
+      // Trigger the Cloudflare bypass flow so the user can open MangaHub, get a cf_clearance
+      // cookie for api.mghcdn.com, and unblock further API calls.
+      throw new CloudflareError(
+        { url: `${MANGAHUB_DOMAIN}/`, method: "GET" },
+        errMsg,
+      );
+    }
 
     const pagesJson = json.data?.chapter?.pages;
     const pages: string[] = [];
