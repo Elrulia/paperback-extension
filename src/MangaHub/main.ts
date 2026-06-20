@@ -155,7 +155,7 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     if (typeof stored === "string" && stored.length > 0) {
       this.accessKey = stored;
     }
-    void this.refreshMhubToken();
+    void this.refreshMhubToken().catch(() => undefined);
   }
 
   async cloudflareBypassCompleted(_request: Request, cookies: Cookie[], _localStorage: Record<string, string>): Promise<void> {
