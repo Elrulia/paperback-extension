@@ -2,6 +2,7 @@
 
 import {
   BasicRateLimiter,
+  CloudflareError,
   ContentRating,
   CookieStorageInterceptor,
   DiscoverSectionType,
@@ -133,11 +134,31 @@ function deriveContentRating(genreIds: Set<string>): ContentRating {
   return ContentRating.EVERYONE;
 }
 
-async function fetchLatestUpdates(page: number): Promise<PagedResults<DiscoverSectionItem>> {
+type LatestMeta = { page: number; seen: string[] };
+
+async function fetchLatestUpdates(
+  page: number,
+  seenIds: Set<string>,
+): Promise<PagedResults<DiscoverSectionItem>> {
   const $ = await fetchCheerio(`${BASE_URL}/updates/page/${page}`);
-  const items = parseMediaMangaItems($, "simpleCarouselItem", true);
+  const items: DiscoverSectionItem[] = [];
+
+  $(".media-manga").each((_, el) => {
+    const titleLink = $(el).find(".media-heading a").first();
+    const href = titleLink.attr("href") ?? "";
+    const mangaId = extractSlug(href);
+    if (!mangaId || seenIds.has(mangaId)) return;
+    seenIds.add(mangaId);
+    const title = titleLink.clone().children().remove().end().text().trim();
+    const img = $(el).find(".media-left img");
+    const rawUrl = img.attr("src") ?? img.attr("data-src") ?? "";
+    const imageUrl = rawUrl.startsWith("http") ? rawUrl : NO_COVER;
+    if (title) items.push({ mangaId, title, imageUrl, type: "simpleCarouselItem" });
+  });
+
   const hasNext = $("ul.pager li.next").length > 0;
-  return { items, metadata: hasNext ? page + 1 : undefined };
+  const meta: LatestMeta = { page: page + 1, seen: [...seenIds] };
+  return { items, metadata: hasNext ? meta : undefined };
 }
 
 export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
@@ -185,13 +206,14 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
 
   async getDiscoverSectionItems(
     section: DiscoverSection,
-    metadata: number | undefined,
+    metadata: JSONValue | undefined,
   ): Promise<PagedResults<DiscoverSectionItem>> {
-    const page = metadata ?? 1;
-
     if (section.id === "latest") {
-      return fetchLatestUpdates(page);
+      const m = metadata as LatestMeta | undefined;
+      return fetchLatestUpdates(m?.page ?? 1, new Set<string>(m?.seen ?? []));
     }
+
+    const page = (metadata as number | undefined) ?? 1;
 
     let url: string;
     let dedupe = false;
@@ -398,7 +420,14 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     };
 
     const errMsg = json.errors?.[0]?.message;
-    if (errMsg) throw new Error(errMsg);
+    if (errMsg) {
+      // Rate-limited: open the chapter in the built-in browser so the user can
+      // still read it. After dismissing, Paperback will retry the native load.
+      throw new CloudflareError(
+        { url: `${BASE_URL}/chapter/${slug}/chapter-${num}`, method: "GET" },
+        errMsg,
+      );
+    }
 
     const pagesJson = json.data?.chapter?.pages;
     const pages: string[] = [];
