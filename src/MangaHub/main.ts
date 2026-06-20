@@ -155,19 +155,25 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
 
   // Paperback calls this after the user completes the WebView bypass session.
   async saveCloudflareBypassCookies(cookies: Cookie[]): Promise<void> {
+    console.log("[MH] bypass cookies:", JSON.stringify(cookies.map((c) => ({ name: c.name, domain: c.domain, hasValue: !!c.value }))));
+
     for (const cookie of cookies) {
-      this.cookieStorageInterceptor.deleteCookie(cookie);
+      try {
+        this.cookieStorageInterceptor.deleteCookie(cookie);
+      } catch (e) {
+        console.log("[MH] deleteCookie crash on:", cookie.name, String(e));
+      }
     }
 
     for (const cookie of cookies) {
       this.cookieStorageInterceptor.setCookie(cookie);
-      // mhub_access is a mangahub.io cookie but must be sent as the x-mhub-access
-      // header to api.mghcdn.com — CookieStorageInterceptor won't cross domains,
-      // so also persist the value in state for getMhubToken() to pick up.
       if (cookie.name === "mhub_access" && cookie.value) {
         Application.setState(cookie.value, "mhubToken");
+        console.log("[MH] saved mhub_access:", cookie.value.slice(0, 8) + "...");
       }
     }
+
+    console.log("[MH] state after bypass:", (Application.getState("mhubToken") as string | undefined)?.slice(0, 8) ?? "NOT SET");
   }
 
   async getDiscoverSections(): Promise<DiscoverSection[]> {
@@ -406,7 +412,9 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   }
 
   async getMhubToken(): Promise<string> {
-    return (Application.getState("mhubToken") as string | undefined) ?? "00000000-0000-0000-0000-000000000000";
+    const token = (Application.getState("mhubToken") as string | undefined) ?? "00000000-0000-0000-0000-000000000000";
+    console.log("[MH] getMhubToken:", token.slice(0, 8) + "...");
+    return token;
   }
 
   // Clears the cached token and refetches mangahub.io so interceptResponse can

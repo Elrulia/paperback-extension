@@ -48,9 +48,13 @@ export class MainInterceptor extends PaperbackInterceptor {
       (response.headers?.["set-cookie"] as string | undefined) ??
       (response.headers?.["Set-Cookie"] as string | undefined) ??
       "";
-    const tokenMatch = setCookie.match(/mhub_access=([a-f0-9]+)/i);
+    if (setCookie) {
+      console.log("[MH] set-cookie:", setCookie.slice(0, 80));
+    }
+    const tokenMatch = setCookie.match(/mhub_access=([a-f0-9-]+)/i);
     if (tokenMatch?.[1]) {
       Application.setState(tokenMatch[1], "mhubToken");
+      console.log("[MH] token from set-cookie:", tokenMatch[1].slice(0, 8) + "...");
     }
 
     return data;
