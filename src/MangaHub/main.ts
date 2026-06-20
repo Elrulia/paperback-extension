@@ -24,13 +24,23 @@ import {
 import * as cheerio from "cheerio";
 
 import { MangaHubSearchForm, type MangaHubSearchMetadata } from "./forms";
-import { MainInterceptor } from "./network";
+import { GRAPHQL_URL, MainInterceptor } from "./network";
 import type MangaHubConfig from "./pbconfig";
 
 const BASE_URL = "https://mangahub.io";
-const API_URL = "https://api.mghcdn.com/graphql";
 const IMG_CDN = "https://imgx.mghcdn.com/";
 const THUMB_CDN = "https://thumb.mghcdn.com/";
+
+const ACCESS_KEY_STATE = "mangahub.accessKey";
+const RELOAD_KEY_STATE = "mangahub.reloadKey";
+
+const USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+];
 const NO_COVER =
   "https://elrulia.github.io/paperback-extension/0.9/stable/MangaHub/static/no-cover.png";
 
@@ -142,38 +152,129 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   });
 
   cookieStorageInterceptor = new CookieStorageInterceptor({ storage: "stateManager" });
-  mainInterceptor = new MainInterceptor("main");
+  mainInterceptor = new MainInterceptor(
+    "main",
+    () => this.accessKey,
+    () => this.currentUserAgent,
+  );
 
   private accessKey = "";
+  private currentUserAgent = "";
   private useReloadKeyParam = false;
 
   async initialise(): Promise<void> {
     this.mainRateLimiter.registerInterceptor();
     this.cookieStorageInterceptor.registerInterceptor();
     this.mainInterceptor.registerInterceptor();
-    const stored = Application.getState("mhubToken");
-    if (typeof stored === "string" && stored.length > 0) {
-      this.accessKey = stored;
-    }
-    void this.refreshMhubToken().catch(() => undefined);
+    const stored = Application.getState(ACCESS_KEY_STATE);
+    if (typeof stored === "string" && stored.length > 0) this.accessKey = stored;
+    const reload = Application.getState(RELOAD_KEY_STATE);
+    if (typeof reload === "boolean") this.useReloadKeyParam = reload;
   }
 
   async cloudflareBypassCompleted(_request: Request, cookies: Cookie[], _localStorage: Record<string, string>): Promise<void> {
     for (const cookie of this.cookieStorageInterceptor.cookies) {
-      try {
-        this.cookieStorageInterceptor.deleteCookie(cookie);
-      } catch {
-        // ignore cookies without domain
-      }
+      try { this.cookieStorageInterceptor.deleteCookie(cookie); } catch { /* no domain */ }
     }
     for (const cookie of cookies) {
       if (cookie.expires && cookie.expires.getTime() <= Date.now()) continue;
       this.cookieStorageInterceptor.setCookie(cookie);
-      if (cookie.name === "mhub_access" && cookie.value) {
-        this.accessKey = cookie.value;
-        Application.setState(cookie.value, "mhubToken");
-      }
     }
+  }
+
+  // ----------------------------------------------------------------
+  // API key management (mirrors the nicartjay reference implementation)
+  // ----------------------------------------------------------------
+
+  private randomInteger(min: number, max: number): number {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+  private cookieDomain(): string {
+    return BASE_URL.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  }
+
+  private findStoredCookieKey(): string {
+    for (const cookie of this.cookieStorageInterceptor.cookies) {
+      if (cookie.name === "mhub_access" && cookie.value) return cookie.value;
+    }
+    return "";
+  }
+
+  private async refreshAccessKey(mangaSlug?: string): Promise<void> {
+    this.currentUserAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]!;
+    const previousKey = this.findStoredCookieKey();
+
+    for (const cookie of this.cookieStorageInterceptor.cookies) {
+      if (cookie.name === "mhub_access") this.cookieStorageInterceptor.deleteCookie(cookie);
+    }
+
+    const now = Date.now();
+    this.cookieStorageInterceptor.setCookie({
+      name: "recently",
+      value: encodeURIComponent(
+        `{"${now - this.randomInteger(0, 1200)}":{"mangaID":${this.randomInteger(1, 30000)},"number":1}}`,
+      ),
+      domain: this.cookieDomain(),
+      path: "/",
+    });
+
+    let path = mangaSlug ? `${BASE_URL}/manga/${mangaSlug}` : `${BASE_URL}/`;
+    if (this.useReloadKeyParam) path += (path.includes("?") ? "&" : "?") + "reloadKey=1";
+
+    const [response] = await Application.scheduleRequest({ url: path, method: "GET" });
+
+    let key = "";
+    for (const cookie of response.cookies ?? []) {
+      if (cookie.name === "mhub_access" && cookie.value) { key = cookie.value; break; }
+    }
+    if (!key) key = this.findStoredCookieKey();
+
+    if (!key || key === previousKey) {
+      this.useReloadKeyParam = !this.useReloadKeyParam;
+      Application.setState(this.useReloadKeyParam, RELOAD_KEY_STATE);
+    }
+
+    if (key) {
+      this.accessKey = key;
+      Application.setState(key, ACCESS_KEY_STATE);
+    }
+  }
+
+  private async postGraphQL(query: string): Promise<{ data?: Record<string, unknown>; errors?: { message?: string }[] }> {
+    const [response, data] = await Application.scheduleRequest({
+      url: GRAPHQL_URL,
+      method: "POST",
+      body: JSON.stringify({ query }),
+    });
+    if (response.status === 404) throw new Error("Content not found");
+    try {
+      return JSON.parse(Application.arrayBufferToUTF8String(data)) as { data?: Record<string, unknown>; errors?: { message?: string }[] };
+    } catch {
+      return {};
+    }
+  }
+
+  private async graphQL(query: string, mangaSlug?: string): Promise<Record<string, unknown>> {
+    if (!this.accessKey) await this.refreshAccessKey(mangaSlug);
+
+    let lastError: Error | undefined;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = await this.postGraphQL(query);
+      const errorText = (result.errors ?? []).map((e) => e.message ?? "").join(" ").toLowerCase().trim();
+
+      if (!errorText) return (result.data ?? {}) as Record<string, unknown>;
+
+      if (/rate\s*limit|api\s*key/.test(errorText)) {
+        lastError = new Error(errorText);
+        await this.refreshAccessKey(mangaSlug);
+        continue;
+      }
+
+      throw new Error(errorText);
+    }
+
+    throw lastError ?? new Error("MangaHub: request failed");
   }
 
   async getDiscoverSections(): Promise<DiscoverSection[]> {
@@ -227,28 +328,11 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   }
 
   async fetchLatestViaApi(page: number): Promise<PagedResults<DiscoverSectionItem>> {
-    const token = this.getMhubToken();
     const offset = (page - 1) * 30;
-
-    const [, data] = await Application.scheduleRequest({
-      url: API_URL,
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json",
-        "x-mhub-access": token,
-        origin: BASE_URL,
-      },
-      body: JSON.stringify({
-        query: `{ search(x: m01, q: "", genre: "all", mod: LATEST, offset: ${offset}) { rows { slug title image } } }`,
-      }),
-    });
-
-    const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
-      data?: { search?: { rows?: { slug: string; title: string; image: string }[] } | null };
-    };
-
-    const rows = json.data?.search?.rows ?? [];
+    const data = await this.graphQL(
+      `{ search(x: m01, q: "", genre: "all", mod: LATEST, offset: ${offset}) { rows { slug title image } } }`,
+    );
+    const rows = ((data["search"] as { rows?: { slug: string; title: string; image: string }[] } | undefined)?.rows) ?? [];
 
     const items: DiscoverSectionItem[] = rows.map((entry) => ({
       mangaId: entry.slug,
@@ -398,94 +482,19 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     return chapters;
   }
 
-  getMhubToken(): string {
-    return this.accessKey || "00000000-0000-0000-0000-000000000000";
-  }
-
-  async refreshMhubToken(slug?: string, chapterNum?: number): Promise<void> {
-    // Set a `recently` cookie mimicking Hakuneko's approach: the server uses
-    // this to validate active reading and issues a fresh (unblocked) mhub_access.
-    const now = Date.now();
-    const recentlyValue = encodeURIComponent(
-      JSON.stringify({
-        [now - Math.floor(Math.random() * 1201)]: {
-          mangaID: Math.floor(Math.random() * 30000) + 1,
-          number: chapterNum && chapterNum > 1 ? chapterNum - 1 : (chapterNum ?? 1),
-        },
-      }),
-    );
-    this.cookieStorageInterceptor.setCookie({
-      name: "recently",
-      value: recentlyValue,
-      domain: "mangahub.io",
-      path: "/",
-      expires: new Date(now + 3 * 31 * 24 * 60 * 60 * 1000),
-    });
-
-    // Remove stale mhub_access so the server issues a new one.
-    const old = this.cookieStorageInterceptor.cookiesForUrl(`${BASE_URL}/`).find((c) => c.name === "mhub_access");
-    if (old) this.cookieStorageInterceptor.deleteCookie(old);
-
-    const path = slug ? `${BASE_URL}/manga/${slug}` : `${BASE_URL}/`;
-    const url = this.useReloadKeyParam ? `${path}?reloadKey=1` : path;
-
-    const [response] = await Application.scheduleRequest({ url, method: "GET" });
-
-    let key = "";
-    for (const cookie of response.cookies ?? []) {
-      if (cookie.name === "mhub_access" && cookie.value) { key = cookie.value; break; }
-    }
-    if (!key) {
-      for (const cookie of this.cookieStorageInterceptor.cookies) {
-        if (cookie.name === "mhub_access" && cookie.value) { key = cookie.value; break; }
-      }
-    }
-    if (key) {
-      this.accessKey = key;
-      Application.setState(key, "mhubToken");
-    }
-  }
-
   async getChapterDetails(chapter: Chapter): Promise<ChapterDetails> {
     const slug = chapter.sourceManga.mangaId;
     const num = chapter.chapterId;
 
-    const fetchPages = async (token: string): Promise<{ pages?: string; errMsg?: string }> => {
-      const [, data] = await Application.scheduleRequest({
-        url: API_URL,
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          accept: "application/json",
-          "x-mhub-access": token,
-          origin: BASE_URL,
-        },
-        body: JSON.stringify({
-          query: `{ chapter(x: m01, slug: "${slug}", number: ${num}) { pages } }`,
-        }),
-      });
-      const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
-        data?: { chapter?: { pages?: string } | null };
-        errors?: { message: string }[];
-      };
-      return { pages: json.data?.chapter?.pages, errMsg: json.errors?.[0]?.message };
-    };
+    const data = await this.graphQL(
+      `{ chapter(x: m01, slug: "${slug}", number: ${num}) { pages } }`,
+      slug,
+    );
 
-    let result = await fetchPages(this.getMhubToken());
-
-    if (result.errMsg) {
-      await this.refreshMhubToken(slug, parseFloat(num));
-      result = await fetchPages(this.getMhubToken());
-    }
-
-    if (result.errMsg) {
-      this.useReloadKeyParam = !this.useReloadKeyParam;
-      throw new Error(result.errMsg);
-    }
-
+    const pagesField = (data["chapter"] as { pages?: string } | undefined)?.pages;
     const pages: string[] = [];
-    if (result.pages) {
-      const parsed = JSON.parse(result.pages) as { p: string; i: string[] };
+    if (pagesField) {
+      const parsed = JSON.parse(pagesField) as { p: string; i: string[] };
       for (const img of parsed.i) {
         pages.push(`${IMG_CDN}${parsed.p}${img}`);
       }
