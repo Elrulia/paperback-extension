@@ -145,6 +145,7 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   mainInterceptor = new MainInterceptor("main");
 
   private accessKey = "";
+  private useReloadKeyParam = false;
 
   async initialise(): Promise<void> {
     this.mainRateLimiter.registerInterceptor();
@@ -413,26 +414,42 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     return this.accessKey || "00000000-0000-0000-0000-000000000000";
   }
 
-  async refreshMhubToken(): Promise<void> {
-    const random = Math.floor(Math.random() * 2000) + 1000;
-    const [response] = await Application.scheduleRequest({
-      url: `${BASE_URL}/chapter/martial-peak/chapter-${random}`,
-      method: "GET",
+  async refreshMhubToken(slug?: string, chapterNum?: number): Promise<void> {
+    // Set a `recently` cookie mimicking Hakuneko's approach: the server uses
+    // this to validate active reading and issues a fresh (unblocked) mhub_access.
+    const now = Date.now();
+    const recentlyValue = encodeURIComponent(
+      JSON.stringify({
+        [now - Math.floor(Math.random() * 1201)]: {
+          mangaID: Math.floor(Math.random() * 30000) + 1,
+          number: chapterNum && chapterNum > 1 ? chapterNum - 1 : (chapterNum ?? 1),
+        },
+      }),
+    );
+    this.cookieStorageInterceptor.setCookie({
+      name: "recently",
+      value: recentlyValue,
+      domain: "mangahub.io",
+      path: "/",
+      expires: new Date(now + 3 * 31 * 24 * 60 * 60 * 1000),
     });
+
+    // Remove stale mhub_access so the server issues a new one.
+    const old = this.cookieStorageInterceptor.cookiesForUrl(`${BASE_URL}/`).find((c) => c.name === "mhub_access");
+    if (old) this.cookieStorageInterceptor.deleteCookie(old);
+
+    const path = slug ? `${BASE_URL}/manga/${slug}` : `${BASE_URL}/`;
+    const url = this.useReloadKeyParam ? `${path}?reloadKey=1` : path;
+
+    const [response] = await Application.scheduleRequest({ url, method: "GET" });
 
     let key = "";
     for (const cookie of response.cookies ?? []) {
-      if (cookie.name === "mhub_access" && cookie.value) {
-        key = cookie.value;
-        break;
-      }
+      if (cookie.name === "mhub_access" && cookie.value) { key = cookie.value; break; }
     }
     if (!key) {
       for (const cookie of this.cookieStorageInterceptor.cookies) {
-        if (cookie.name === "mhub_access" && cookie.value) {
-          key = cookie.value;
-          break;
-        }
+        if (cookie.name === "mhub_access" && cookie.value) { key = cookie.value; break; }
       }
     }
     if (key) {
@@ -469,11 +486,12 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     let result = await fetchPages(this.getMhubToken());
 
     if (result.errMsg) {
-      await this.refreshMhubToken();
+      await this.refreshMhubToken(slug, parseFloat(num));
       result = await fetchPages(this.getMhubToken());
     }
 
     if (result.errMsg) {
+      this.useReloadKeyParam = !this.useReloadKeyParam;
       throw new Error(result.errMsg);
     }
 
