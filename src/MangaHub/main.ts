@@ -461,7 +461,12 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     }
 
     if (result.errMsg) {
-      throw new Error(result.errMsg);
+      const tokenAfter = await this.getMhubToken();
+      const cookiesAfter = this.cookieStorageInterceptor
+        .cookiesForUrl(`${BASE_URL}/`)
+        .map((c) => `${c.name}=${c.value?.slice(0, 6)}`)
+        .join(", ");
+      throw new Error(`${result.errMsg} | after-refresh token=${tokenAfter.slice(0, 8)} | cookies=[${cookiesAfter || "none"}]`);
     }
 
     const pages: string[] = [];
