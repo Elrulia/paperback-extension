@@ -24,7 +24,7 @@ import {
 import * as cheerio from "cheerio";
 
 import { MangaHubSearchForm, type MangaHubSearchMetadata } from "./forms";
-import { MainInterceptor, MANGAHUB_DOMAIN } from "./network";
+import { API_DOMAIN, MainInterceptor } from "./network";
 import type MangaHubConfig from "./pbconfig";
 
 const BASE_URL = "https://mangahub.io";
@@ -391,11 +391,10 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
 
     const errMsg = json.errors?.[0]?.message;
     if (errMsg) {
-      // MangaHub rate-limits unauthenticated API access and tells users to visit the site.
-      // Trigger the Cloudflare bypass flow so the user can open MangaHub, get a cf_clearance
-      // cookie for api.mghcdn.com, and unblock further API calls.
+      // Rate limit comes from api.mghcdn.com — bypass must target that domain so
+      // saveCloudflareBypassCookies stores cf_clearance for the API, not mangahub.io.
       throw new CloudflareError(
-        { url: `${MANGAHUB_DOMAIN}/`, method: "GET" },
+        { url: `${API_DOMAIN}/`, method: "GET" },
         errMsg,
       );
     }

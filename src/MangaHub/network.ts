@@ -28,15 +28,16 @@ export class MainInterceptor extends PaperbackInterceptor {
     data: ArrayBuffer,
   ): Promise<ArrayBuffer> {
     if (response.headers?.["cf-mitigated"] === "challenge") {
-      // Cloudflare challenged the request — open mangahub.io so the user can
-      // pass the challenge and set cf_clearance for both domains.
+      // Use the challenged domain so saveCloudflareBypassCookies stores
+      // cf_clearance for the right domain (mangahub.io vs api.mghcdn.com).
+      const origin = request.url.match(/^https?:\/\/[^/]+/)?.[0] ?? MANGAHUB_DOMAIN;
       throw new CloudflareError(
         {
-          url: `${MANGAHUB_DOMAIN}/`,
+          url: `${origin}/`,
           method: "GET",
           headers: { "user-agent": SAFARI_UA },
         },
-        "Open MangaHub to bypass Cloudflare",
+        "Open the page to bypass Cloudflare",
       );
     }
 
