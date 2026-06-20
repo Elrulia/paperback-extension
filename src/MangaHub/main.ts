@@ -408,11 +408,9 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     return (Application.getState("mhubToken") as string | undefined) ?? "00000000-0000-0000-0000-000000000000";
   }
 
-  // Mirrors 0.8 refreshAPIKey(): deletes the stored mhub_access cookie so the
-  // next request to mangahub.io goes without it, causing the server to issue a
-  // fresh token. interceptResponse extracts it from Set-Cookie and saves it.
+  // Clears the cached token and refetches mangahub.io so interceptResponse can
+  // extract a fresh mhub_access from Set-Cookie. Mirrors 0.8 refreshAPIKey().
   async refreshMhubToken(): Promise<void> {
-    this.cookieStorageInterceptor.deleteCookie({ name: "mhub_access", value: "" } as Cookie);
     Application.setState(undefined, "mhubToken");
     await Application.scheduleRequest({ url: `${BASE_URL}/`, method: "GET" });
   }
