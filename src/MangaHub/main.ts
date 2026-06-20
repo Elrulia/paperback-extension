@@ -367,56 +367,26 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     const slug = chapter.sourceManga.mangaId;
     const num = chapter.chapterId;
 
-    // Cloudflare only challenges POST /graphql from non-browser stacks (URLSession).
-    // A cross-origin fetch issued from inside a real WebKit context is indistinguishable
-    // from the MangaHub SPA itself — Cloudflare lets it through without a challenge.
-    const requestBody = JSON.stringify({
-      query: `{ chapter(x: m01, slug: "${slug}", number: ${num}) { pages } }`,
-    });
-
-    // executeInWebView evaluates the inject synchronously — async/await or fetch()
-    // returns a Promise which Paperback cannot serialize, so we use synchronous XHR.
-    // The WebView runs at baseUrl mangahub.io, so the cross-origin POST to
-    // api.mghcdn.com looks identical to the MangaHub SPA making its own API call.
-    const { result } = await Application.executeInWebView({
-      source: {
-        html: "<!DOCTYPE html><html><body></body></html>",
-        baseUrl: BASE_URL,
-        loadCSS: false,
-        loadImages: false,
+    const [, data] = await Application.scheduleRequest({
+      url: API_URL,
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+        "x-mhub-access": "00000000-0000-0000-0000-000000000000",
+        origin: BASE_URL,
       },
-      inject: `(function() {
-        try {
-          var xhr = new XMLHttpRequest();
-          xhr.open("POST", ${JSON.stringify(API_URL)}, false);
-          xhr.setRequestHeader("Content-Type", "application/json");
-          xhr.setRequestHeader("Accept", "application/json");
-          xhr.setRequestHeader("x-mhub-access", "00000000-0000-0000-0000-000000000000");
-          xhr.send(${JSON.stringify(requestBody)});
-          if (xhr.status === 0) return { fetchError: "Network error (no response)" };
-          try {
-            return JSON.parse(xhr.responseText);
-          } catch (parseErr) {
-            return { fetchError: "Non-JSON " + xhr.status + ": " + xhr.responseText.substring(0, 300) };
-          }
-        } catch (e) {
-          return { fetchError: String(e) };
-        }
-      })()`,
-      storage: { cookies: [] },
+      body: JSON.stringify({
+        query: `{ chapter(x: m01, slug: "${slug}", number: ${num}) { pages } }`,
+      }),
     });
 
-    if (result === undefined || result === null) {
-      throw new Error("Chapter WebView returned no result — executeInWebView may not be supported");
-    }
-
-    const json = result as {
+    // interceptResponse throws CloudflareError before we reach here if the response
+    // is a Cloudflare HTML challenge (cf-mitigated: challenge header).
+    const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
       data?: { chapter?: { pages?: string } | null };
       errors?: { message: string }[];
-      fetchError?: string;
     };
-
-    if (json.fetchError !== undefined) throw new Error(json.fetchError);
 
     const errMsg = json.errors?.[0]?.message;
     if (errMsg) throw new Error(errMsg);
