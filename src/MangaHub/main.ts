@@ -374,6 +374,10 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       query: `{ chapter(x: m01, slug: "${slug}", number: ${num}) { pages } }`,
     });
 
+    // executeInWebView evaluates the inject synchronously — async/await or fetch()
+    // returns a Promise which Paperback cannot serialize, so we use synchronous XHR.
+    // The WebView runs at baseUrl mangahub.io, so the cross-origin POST to
+    // api.mghcdn.com looks identical to the MangaHub SPA making its own API call.
     const { result } = await Application.executeInWebView({
       source: {
         html: "<!DOCTYPE html><html><body></body></html>",
@@ -381,36 +385,38 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
         loadCSS: false,
         loadImages: false,
       },
-      inject: `(async () => {
+      inject: `(function() {
         try {
-          const r = await fetch(${JSON.stringify(API_URL)}, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Accept": "application/json",
-              "x-mhub-access": "00000000-0000-0000-0000-000000000000",
-              "Origin": ${JSON.stringify(BASE_URL)},
-              "Referer": ${JSON.stringify(BASE_URL + "/")}
-            },
-            body: ${JSON.stringify(requestBody)}
-          });
-          return r.ok ? r.json() : { httpError: r.status };
-        } catch (err) {
-          return { fetchError: String(err) };
+          var xhr = new XMLHttpRequest();
+          xhr.open("POST", ${JSON.stringify(API_URL)}, false);
+          xhr.setRequestHeader("Content-Type", "application/json");
+          xhr.setRequestHeader("Accept", "application/json");
+          xhr.setRequestHeader("x-mhub-access", "00000000-0000-0000-0000-000000000000");
+          xhr.send(${JSON.stringify(requestBody)});
+          if (xhr.status === 0) return { fetchError: "Network error (no response)" };
+          try {
+            return JSON.parse(xhr.responseText);
+          } catch (parseErr) {
+            return { fetchError: "Non-JSON " + xhr.status + ": " + xhr.responseText.substring(0, 300) };
+          }
+        } catch (e) {
+          return { fetchError: String(e) };
         }
       })()`,
       storage: { cookies: [] },
     });
 
+    if (result === undefined || result === null) {
+      throw new Error("Chapter WebView returned no result — executeInWebView may not be supported");
+    }
+
     const json = result as {
       data?: { chapter?: { pages?: string } | null };
       errors?: { message: string }[];
-      httpError?: number;
       fetchError?: string;
     };
 
     if (json.fetchError !== undefined) throw new Error(json.fetchError);
-    if (json.httpError !== undefined) throw new Error(`API returned HTTP ${json.httpError}`);
 
     const errMsg = json.errors?.[0]?.message;
     if (errMsg) throw new Error(errMsg);
