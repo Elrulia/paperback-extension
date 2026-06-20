@@ -148,6 +148,9 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     this.mainRateLimiter.registerInterceptor();
     this.cookieStorageInterceptor.registerInterceptor();
     this.mainInterceptor.registerInterceptor();
+    // Eagerly refresh the token on startup so chapter loads don't start with
+    // the null GUID fallback (which exhausts its rate limit in ~1 chapter).
+    void this.refreshMhubToken();
   }
 
   // Paperback calls this after the user completes the WebView bypass session.
@@ -222,55 +225,35 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     return { items, metadata: hasNext ? page + 1 : undefined };
   }
 
-  // Fetches latest-updated manga via the GraphQL API, which returns one entry per
-  // unique manga (never duplicates). Page 1 uses the `latest` query; further pages
-  // use `search(mod: LATEST, offset: N)` — mirroring the 0.8 extension pattern.
+  // Fetches latest-updated manga via the GraphQL API's search(mod: LATEST) query,
+  // which returns one entry per unique manga — never duplicates.
+  // The 0.8 extension uses this same query for all pages (aliased to "latest").
   async fetchLatestViaApi(page: number): Promise<PagedResults<DiscoverSectionItem>> {
     const token = await this.getMhubToken();
+    const offset = (page - 1) * 30;
     type MangaRow = { title?: string; slug?: string; image?: string };
-    let rows: MangaRow[];
 
-    if (page === 1) {
-      const [, data] = await Application.scheduleRequest({
-        url: API_URL,
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          accept: "application/json",
-          "x-mhub-access": token,
-          origin: BASE_URL,
-        },
-        body: JSON.stringify({ query: `{ latest(x: m01, limit: 30) { id title slug image } }` }),
-      });
-      const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
-        data?: { latest?: MangaRow[] };
-        errors?: { message: string }[];
-      };
-      if (json.errors?.[0]) throw new Error(json.errors[0].message);
-      rows = json.data?.latest ?? [];
-    } else {
-      const offset = (page - 1) * 30;
-      const [, data] = await Application.scheduleRequest({
-        url: API_URL,
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          accept: "application/json",
-          "x-mhub-access": token,
-          origin: BASE_URL,
-        },
-        body: JSON.stringify({
-          query: `{ search(x: m01, mod: LATEST, offset: ${offset}) { rows { id title slug image } } }`,
-        }),
-      });
-      const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
-        data?: { search?: { rows?: MangaRow[] } };
-        errors?: { message: string }[];
-      };
-      if (json.errors?.[0]) throw new Error(json.errors[0].message);
-      rows = json.data?.search?.rows ?? [];
-    }
+    const [, data] = await Application.scheduleRequest({
+      url: API_URL,
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+        "x-mhub-access": token,
+        origin: BASE_URL,
+      },
+      body: JSON.stringify({
+        query: `{ search(x: m01, mod: LATEST, offset: ${offset}) { rows { id title slug image } } }`,
+      }),
+    });
 
+    const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
+      data?: { search?: { rows?: MangaRow[] } };
+      errors?: { message: string }[];
+    };
+    if (json.errors?.[0]) throw new Error(json.errors[0].message);
+
+    const rows = json.data?.search?.rows ?? [];
     const items: DiscoverSectionItem[] = rows
       .filter((m) => m.slug && m.title)
       .map((m) => ({
@@ -422,56 +405,66 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   }
 
   async getMhubToken(): Promise<string> {
-    const cached = Application.getState("mhubToken") as string | undefined;
-    if (cached) return cached;
-    // Token not yet cached — fetch the homepage so interceptResponse can extract
-    // the mhub_access value from the Set-Cookie response header.
-    await Application.scheduleRequest({ url: BASE_URL + "/", method: "GET" });
     return (Application.getState("mhubToken") as string | undefined) ?? "00000000-0000-0000-0000-000000000000";
+  }
+
+  // Mirrors 0.8 refreshAPIKey(): deletes the stored mhub_access cookie so the
+  // next request to mangahub.io goes without it, causing the server to issue a
+  // fresh token. interceptResponse extracts it from Set-Cookie and saves it.
+  async refreshMhubToken(): Promise<void> {
+    this.cookieStorageInterceptor.deleteCookie({ name: "mhub_access", value: "" } as Cookie);
+    Application.setState(undefined, "mhubToken");
+    await Application.scheduleRequest({ url: `${BASE_URL}/`, method: "GET" });
   }
 
   async getChapterDetails(chapter: Chapter): Promise<ChapterDetails> {
     const slug = chapter.sourceManga.mangaId;
     const num = chapter.chapterId;
-    const token = await this.getMhubToken();
 
-    const [, data] = await Application.scheduleRequest({
-      url: API_URL,
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json",
-        "x-mhub-access": token,
-        origin: BASE_URL,
-      },
-      body: JSON.stringify({
-        query: `{ chapter(x: m01, slug: "${slug}", number: ${num}) { pages } }`,
-      }),
-    });
-
-    const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
-      data?: { chapter?: { pages?: string } | null };
-      errors?: { message: string }[];
+    const fetchPages = async (token: string): Promise<{ pages?: string; errMsg?: string }> => {
+      const [, data] = await Application.scheduleRequest({
+        url: API_URL,
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json",
+          "x-mhub-access": token,
+          origin: BASE_URL,
+        },
+        body: JSON.stringify({
+          query: `{ chapter(x: m01, slug: "${slug}", number: ${num}) { pages } }`,
+        }),
+      });
+      const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
+        data?: { chapter?: { pages?: string } | null };
+        errors?: { message: string }[];
+      };
+      return { pages: json.data?.chapter?.pages, errMsg: json.errors?.[0]?.message };
     };
 
-    const errMsg = json.errors?.[0]?.message;
-    if (errMsg) {
-      // Clear the stale token. The bypass WebView will get a fresh mhub_access from
-      // mangahub.io (its own cookie jar), which saveCloudflareBypassCookies saves.
-      // The retry then picks up the new token via getMhubToken().
-      // ?reloadKey=1 mirrors what MangaHub's SPA appends on API errors.
-      Application.setState(undefined, "mhubToken");
+    let result = await fetchPages(await this.getMhubToken());
+
+    if (result.errMsg) {
+      // First attempt failed. Try a silent token refresh (mirrors 0.8 refreshAPIKey)
+      // before falling back to the user-visible bypass dialog.
+      await this.refreshMhubToken();
+      result = await fetchPages(await this.getMhubToken());
+    }
+
+    if (result.errMsg) {
+      // Refresh didn't help — open the bypass WebView. The WebView has its own
+      // cookie jar so it gets a fresh mhub_access; saveCloudflareBypassCookies
+      // captures it and the subsequent Paperback retry uses it.
+      // ?reloadKey=1 matches what MangaHub's SPA appends on API errors.
       throw new CloudflareError(
         { url: `${BASE_URL}/chapter/${slug}/chapter-${num}?reloadKey=1`, method: "GET" },
-        errMsg,
+        result.errMsg,
       );
     }
 
-    const pagesJson = json.data?.chapter?.pages;
     const pages: string[] = [];
-
-    if (pagesJson) {
-      const parsed = JSON.parse(pagesJson) as { p: string; i: string[] };
+    if (result.pages) {
+      const parsed = JSON.parse(result.pages) as { p: string; i: string[] };
       for (const img of parsed.i) {
         pages.push(`${IMG_CDN}${parsed.p}${img}`);
       }
