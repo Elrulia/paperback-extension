@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later */
+﻿/* SPDX-License-Identifier: GPL-3.0-or-later */
 
 import {
   BasicRateLimiter,
@@ -30,6 +30,7 @@ import type MangaHubConfig from "./pbconfig";
 const BASE_URL = "https://mangahub.io";
 const API_URL = "https://api.mghcdn.com/graphql";
 const IMG_CDN = "https://imgx.mghcdn.com/";
+const THUMB_CDN = "https://thumb.mghcdn.com/";
 const NO_COVER =
   "https://elrulia.github.io/paperback-extension/0.9/stable/MangaHub/static/no-cover.png";
 
@@ -69,7 +70,6 @@ function parseChapterDate(text: string): Date {
     if (ms !== undefined) return new Date(Date.now() - n * ms);
   }
 
-  // Unknown format — almost certainly a "just now" variant; treat as current time
   return new Date();
 }
 
@@ -134,33 +134,6 @@ function deriveContentRating(genreIds: Set<string>): ContentRating {
   return ContentRating.EVERYONE;
 }
 
-type LatestMeta = { page: number; seen: string[] };
-
-async function fetchLatestUpdates(
-  page: number,
-  seenIds: Set<string>,
-): Promise<PagedResults<DiscoverSectionItem>> {
-  const $ = await fetchCheerio(`${BASE_URL}/updates/page/${page}`);
-  const items: DiscoverSectionItem[] = [];
-
-  $(".media-manga").each((_, el) => {
-    const titleLink = $(el).find(".media-heading a").first();
-    const href = titleLink.attr("href") ?? "";
-    const mangaId = extractSlug(href);
-    if (!mangaId || seenIds.has(mangaId)) return;
-    seenIds.add(mangaId);
-    const title = titleLink.clone().children().remove().end().text().trim();
-    const img = $(el).find(".media-left img");
-    const rawUrl = img.attr("src") ?? img.attr("data-src") ?? "";
-    const imageUrl = rawUrl.startsWith("http") ? rawUrl : NO_COVER;
-    if (title) items.push({ mangaId, title, imageUrl, type: "simpleCarouselItem" });
-  });
-
-  const hasNext = $("ul.pager li.next").length > 0;
-  const meta: LatestMeta = { page: page + 1, seen: [...seenIds] };
-  return { items, metadata: hasNext ? meta : undefined };
-}
-
 export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   mainRateLimiter = new BasicRateLimiter("main", {
     numberOfRequests: 10,
@@ -178,7 +151,6 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   }
 
   // Paperback calls this after the user completes the WebView bypass session.
-  // Store all CF-related cookies so CookieStorageInterceptor sends them on API requests.
   async saveCloudflareBypassCookies(cookies: Cookie[]): Promise<void> {
     for (const cookie of cookies) {
       this.cookieStorageInterceptor.deleteCookie(cookie);
@@ -190,6 +162,12 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
         cookie.name.startsWith("__cf")
       ) {
         this.cookieStorageInterceptor.setCookie(cookie);
+      }
+      // The bypass WebView receives a server-assigned mhub_access token from
+      // mangahub.io. Save its value so the retry uses it as x-mhub-access,
+      // giving the request a potentially fresh rate-limit bucket.
+      if (cookie.name === "mhub_access" && cookie.value) {
+        Application.setState(cookie.value, "mhubToken");
       }
     }
   }
@@ -209,8 +187,8 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     metadata: JSONValue | undefined,
   ): Promise<PagedResults<DiscoverSectionItem>> {
     if (section.id === "latest") {
-      const m = metadata as LatestMeta | undefined;
-      return fetchLatestUpdates(m?.page ?? 1, new Set<string>(m?.seen ?? []));
+      const page = (metadata as number | undefined) ?? 1;
+      return this.fetchLatestViaApi(page);
     }
 
     const page = (metadata as number | undefined) ?? 1;
@@ -244,6 +222,67 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     return { items, metadata: hasNext ? page + 1 : undefined };
   }
 
+  // Fetches latest-updated manga via the GraphQL API, which returns one entry per
+  // unique manga (never duplicates). Page 1 uses the `latest` query; further pages
+  // use `search(mod: LATEST, offset: N)` — mirroring the 0.8 extension pattern.
+  async fetchLatestViaApi(page: number): Promise<PagedResults<DiscoverSectionItem>> {
+    const token = await this.getMhubToken();
+    type MangaRow = { title?: string; slug?: string; image?: string };
+    let rows: MangaRow[];
+
+    if (page === 1) {
+      const [, data] = await Application.scheduleRequest({
+        url: API_URL,
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json",
+          "x-mhub-access": token,
+          origin: BASE_URL,
+        },
+        body: JSON.stringify({ query: `{ latest(x: m01, limit: 30) { id title slug image } }` }),
+      });
+      const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
+        data?: { latest?: MangaRow[] };
+        errors?: { message: string }[];
+      };
+      if (json.errors?.[0]) throw new Error(json.errors[0].message);
+      rows = json.data?.latest ?? [];
+    } else {
+      const offset = (page - 1) * 30;
+      const [, data] = await Application.scheduleRequest({
+        url: API_URL,
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json",
+          "x-mhub-access": token,
+          origin: BASE_URL,
+        },
+        body: JSON.stringify({
+          query: `{ search(x: m01, mod: LATEST, offset: ${offset}) { rows { id title slug image } } }`,
+        }),
+      });
+      const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
+        data?: { search?: { rows?: MangaRow[] } };
+        errors?: { message: string }[];
+      };
+      if (json.errors?.[0]) throw new Error(json.errors[0].message);
+      rows = json.data?.search?.rows ?? [];
+    }
+
+    const items: DiscoverSectionItem[] = rows
+      .filter((m) => m.slug && m.title)
+      .map((m) => ({
+        mangaId: m.slug!,
+        title: m.title!,
+        imageUrl: m.image ? `${THUMB_CDN}${m.image}` : NO_COVER,
+        type: "simpleCarouselItem" as const,
+      }));
+
+    return { items, metadata: rows.length >= 30 ? page + 1 : undefined };
+  }
+
   async getSortingOptions(_query: SearchQuery<JSONValue>): Promise<SortingOption[]> {
     return [
       { id: "POPULAR", label: "Popular" },
@@ -264,7 +303,6 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     sortingOption?: SortingOption,
   ): Promise<PagedResults<SearchResultItem>> {
     const page = (metadata as { page?: number } | undefined)?.page ?? 1;
-    // Escape `"` → `\"` so MangaHub's search backend matches literal quote chars in titles
     const q = encodeURIComponent((query.title ?? "").replace(/"/g, '\\"'));
     const order = sortingOption?.id ?? "POPULAR";
     const { genres = ["all"] } = (query.metadata as MangaHubSearchMetadata | undefined) ?? {};
@@ -301,7 +339,6 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       .split(";")
       .map((t) => t.trim())
       .filter(Boolean);
-    // Remove ALL child elements (small alt-titles + span badges like "Hot") to get plain title
     const primaryTitle = h1.clone().children().remove().end().text().trim();
     const rawThumb = $("img.manga-thumb").first().attr("src") ?? "";
     const thumbnailUrl = rawThumb.startsWith("http") ? rawThumb : NO_COVER;
@@ -359,7 +396,6 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     const chapters: Chapter[] = [];
     const seen = new Set<string>();
 
-    // _3pfyN = free chapters; _1AxFv = premium (skip)
     $("li._287KE a._3pfyN").each((_, el) => {
       const href = $(el).attr("href") ?? "";
       const match = href.match(/\/chapter-([\d.]+)(?:[?#].*)?$/);
@@ -388,7 +424,8 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   async getMhubToken(): Promise<string> {
     const cached = Application.getState("mhubToken") as string | undefined;
     if (cached) return cached;
-    // Token not yet cached — fetch the homepage; interceptResponse extracts it.
+    // Token not yet cached — fetch the homepage so interceptResponse can extract
+    // the mhub_access value from the Set-Cookie response header.
     await Application.scheduleRequest({ url: BASE_URL + "/", method: "GET" });
     return (Application.getState("mhubToken") as string | undefined) ?? "00000000-0000-0000-0000-000000000000";
   }
@@ -412,8 +449,6 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       }),
     });
 
-    // interceptResponse throws CloudflareError before we reach here if the response
-    // is a Cloudflare HTML challenge (cf-mitigated: challenge header).
     const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
       data?: { chapter?: { pages?: string } | null };
       errors?: { message: string }[];
@@ -421,10 +456,13 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
 
     const errMsg = json.errors?.[0]?.message;
     if (errMsg) {
-      // Rate-limited: open the chapter in the built-in browser so the user can
-      // still read it. After dismissing, Paperback will retry the native load.
+      // Clear the stale token. The bypass WebView will get a fresh mhub_access from
+      // mangahub.io (its own cookie jar), which saveCloudflareBypassCookies saves.
+      // The retry then picks up the new token via getMhubToken().
+      // ?reloadKey=1 mirrors what MangaHub's SPA appends on API errors.
+      Application.setState(undefined, "mhubToken");
       throw new CloudflareError(
-        { url: `${BASE_URL}/chapter/${slug}/chapter-${num}`, method: "GET" },
+        { url: `${BASE_URL}/chapter/${slug}/chapter-${num}?reloadKey=1`, method: "GET" },
         errMsg,
       );
     }

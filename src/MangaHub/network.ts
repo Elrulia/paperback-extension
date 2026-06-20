@@ -1,20 +1,22 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later */
+﻿/* SPDX-License-Identifier: GPL-3.0-or-later */
 
 import { CloudflareError, PaperbackInterceptor, type Request, type Response } from "@paperback/types";
 
 export const MANGAHUB_DOMAIN = "https://mangahub.io";
 export const API_DOMAIN = "https://api.mghcdn.com";
 
-// Use a browser-like UA so Cloudflare's bot-score check passes.
-const SAFARI_UA =
-  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+// Cached on first request so we only await the async UA API once per session.
+let cachedUA: string | undefined;
 
 export class MainInterceptor extends PaperbackInterceptor {
   override async interceptRequest(request: Request): Promise<Request> {
+    if (!cachedUA) {
+      cachedUA = await Application.getDefaultUserAgent();
+    }
     return {
       ...request,
       headers: {
-        "user-agent": SAFARI_UA,
+        "user-agent": cachedUA,
         referer: `${MANGAHUB_DOMAIN}/`,
         "accept-language": "en-US,en;q=0.9",
         ...request.headers,
@@ -28,23 +30,20 @@ export class MainInterceptor extends PaperbackInterceptor {
     data: ArrayBuffer,
   ): Promise<ArrayBuffer> {
     if (response.headers?.["cf-mitigated"] === "challenge") {
-      // Always bypass through the main website. api.mghcdn.com only protects POST
-      // requests; a WebView GET to that domain won't show a challenge ("Cannot GET /").
-      // Directing the user to mangahub.io gives them a real page to interact with.
       throw new CloudflareError(
-        {
-          url: `${MANGAHUB_DOMAIN}/`,
-          method: "GET",
-          headers: { "user-agent": SAFARI_UA },
-        },
+        { url: `${MANGAHUB_DOMAIN}/`, method: "GET" },
         "Open MangaHub to verify and continue",
       );
     }
 
-    // MangaHub assigns a per-IP session token via Set-Cookie on every mangahub.io
+    // MangaHub assigns a per-session token via Set-Cookie on every mangahub.io
     // response. The SPA reads "mhub_access" and sends it as x-mhub-access on API
-    // calls. Cache it so we use the real token instead of the null GUID (rate-limited).
-    const setCookie = (response.headers?.["set-cookie"] as string | undefined) ?? "";
+    // calls. Cache the value so we use the real token instead of the null GUID.
+    // Handle both "set-cookie" (Paperback-normalised) and "Set-Cookie" (raw iOS).
+    const setCookie =
+      (response.headers?.["set-cookie"] as string | undefined) ??
+      (response.headers?.["Set-Cookie"] as string | undefined) ??
+      "";
     const tokenMatch = setCookie.match(/mhub_access=([a-f0-9]+)/i);
     if (tokenMatch?.[1]) {
       Application.setState(tokenMatch[1], "mhubToken");
