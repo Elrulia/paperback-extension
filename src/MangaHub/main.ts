@@ -3,6 +3,7 @@
 import {
   BasicRateLimiter,
   ContentRating,
+  CookieStorageInterceptor,
   DiscoverSectionType,
   type AdvancedSearchForm,
   type Chapter,
@@ -131,47 +132,10 @@ function deriveContentRating(genreIds: Set<string>): ContentRating {
   return ContentRating.EVERYONE;
 }
 
-const PAGE_SIZE = 30;
-
-async function fetchLatestViaApi(page: number): Promise<PagedResults<DiscoverSectionItem>> {
-  const [, data] = await Application.scheduleRequest({
-    url: API_URL,
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-mhub-access": "00000000-0000-0000-0000-000000000000",
-      origin: BASE_URL,
-    },
-    body: JSON.stringify({
-      query: `{ latest(x: m01, limit: 2000) { id title slug image } }`,
-    }),
-  });
-
-  const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
-    data?: { latest?: { id: number; slug: string; title: string; image: string }[] | null };
-  };
-
-  const all = json.data?.latest ?? [];
-
-  // Deduplicate by database manga ID — same as MangaHub's client-side JS
-  const seenId = new Set<number>();
-  const deduped = all.filter((entry) => {
-    if (seenId.has(entry.id)) return false;
-    seenId.add(entry.id);
-    return true;
-  });
-
-  const offset = (page - 1) * PAGE_SIZE;
-  const pageItems = deduped.slice(offset, offset + PAGE_SIZE);
-  const hasNext = offset + PAGE_SIZE < deduped.length;
-
-  const items: DiscoverSectionItem[] = pageItems.map((entry) => ({
-    mangaId: entry.slug,
-    title: entry.title,
-    imageUrl: entry.image.startsWith("http") ? entry.image : `https://thumb.mghcdn.com/${entry.image}`,
-    type: "simpleCarouselItem" as const,
-  }));
-
+async function fetchLatestUpdates(page: number): Promise<PagedResults<DiscoverSectionItem>> {
+  const $ = await fetchCheerio(`${BASE_URL}/updates/page/${page}`);
+  const items = parseMediaMangaItems($, "simpleCarouselItem", true);
+  const hasNext = $("ul.pager li.next").length > 0;
   return { items, metadata: hasNext ? page + 1 : undefined };
 }
 
@@ -182,10 +146,12 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     ignoreImages: true,
   });
 
+  cookieStorageInterceptor = new CookieStorageInterceptor({ storage: "stateManager" });
   mainInterceptor = new MainInterceptor("main");
 
   async initialise(): Promise<void> {
     this.mainRateLimiter.registerInterceptor();
+    this.cookieStorageInterceptor.registerInterceptor();
     this.mainInterceptor.registerInterceptor();
   }
 
@@ -206,7 +172,7 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     const page = metadata ?? 1;
 
     if (section.id === "latest") {
-      return fetchLatestViaApi(page);
+      return fetchLatestUpdates(page);
     }
 
     let url: string;
@@ -388,6 +354,7 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       method: "POST",
       headers: {
         "content-type": "application/json",
+        accept: "application/json",
         "x-mhub-access": "00000000-0000-0000-0000-000000000000",
         origin: BASE_URL,
       },
@@ -396,9 +363,15 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       }),
     });
 
+    // CloudflareError is thrown by the interceptor before we get here if the response is HTML.
+    // Handle server-side errors (rate limit, null chapter) gracefully.
     const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
       data?: { chapter?: { pages?: string } | null };
+      errors?: { message: string }[];
     };
+
+    const errMsg = json.errors?.[0]?.message;
+    if (errMsg) throw new Error(errMsg);
 
     const pagesJson = json.data?.chapter?.pages;
     const pages: string[] = [];
