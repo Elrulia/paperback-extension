@@ -173,7 +173,11 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       }
     }
 
-    console.log("[MH] state after bypass:", (Application.getState("mhubToken") as string | undefined)?.slice(0, 8) ?? "NOT SET");
+    const stateAfter = (Application.getState("mhubToken") as string | undefined);
+    console.log("[MH] state after bypass:", stateAfter?.slice(0, 8) ?? "NOT SET");
+    if (!stateAfter) {
+      throw new Error(`Bypass complete but mhub_access NOT found in cookies. Got: ${cookies.map((c) => c.name).join(", ")}`);
+    }
   }
 
   async getDiscoverSections(): Promise<DiscoverSection[]> {
@@ -459,13 +463,10 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     }
 
     if (result.errMsg) {
-      // Refresh didn't help — open the bypass WebView. The WebView has its own
-      // cookie jar so it gets a fresh mhub_access; saveCloudflareBypassCookies
-      // captures it and the subsequent Paperback retry uses it.
-      // ?reloadKey=1 matches what MangaHub's SPA appends on API errors.
+      const debugToken = await this.getMhubToken();
       throw new CloudflareError(
         { url: `${BASE_URL}/chapter/${slug}/chapter-${num}?reloadKey=1`, method: "GET" },
-        result.errMsg,
+        `${result.errMsg} | token=${debugToken.slice(0, 8)}`,
       );
     }
 
