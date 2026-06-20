@@ -5,41 +5,45 @@ import { CloudflareError, PaperbackInterceptor, type Request, type Response } fr
 export const MANGAHUB_DOMAIN = "https://mangahub.io";
 export const API_DOMAIN = "https://api.mghcdn.com";
 
-// Cached on first request so we only await the async UA API once per session.
-let cachedUA: string | undefined;
 
 export class MainInterceptor extends PaperbackInterceptor {
   override async interceptRequest(request: Request): Promise<Request> {
-    if (!cachedUA) {
-      cachedUA = await Application.getDefaultUserAgent();
-    }
-    return {
-      ...request,
-      headers: {
-        "user-agent": cachedUA,
-        referer: `${MANGAHUB_DOMAIN}/`,
-        "accept-language": "en-US,en;q=0.9",
-        ...request.headers,
-      },
+    request.headers = {
+      ...request.headers,
+      "user-agent": await Application.getDefaultUserAgent(),
+      referer: `${MANGAHUB_DOMAIN}/`,
     };
+
+    request.cookies = {
+      ...request.cookies,
+    };
+
+    return request;
   }
 
   override async interceptResponse(
-    request: Request,
+    _request: Request,
     response: Response,
     data: ArrayBuffer,
   ): Promise<ArrayBuffer> {
-    if (response.headers?.["cf-mitigated"] === "challenge") {
+    const cfMitigated = response.headers?.["cf-mitigated"];
+    if (cfMitigated === "challenge") {
       throw new CloudflareError(
-        { url: `${MANGAHUB_DOMAIN}/`, method: "GET" },
-        "Open MangaHub to verify and continue",
+        {
+          url: MANGAHUB_DOMAIN,
+          method: "GET",
+          headers: {
+            referer: `${MANGAHUB_DOMAIN}/`,
+            origin: `${MANGAHUB_DOMAIN}/`,
+            "user-agent": await Application.getDefaultUserAgent(),
+          },
+        },
+        "Cloudflare detected, bypass it to continue!",
       );
     }
 
-    // MangaHub assigns a per-session token via Set-Cookie on every mangahub.io
-    // response. The SPA reads "mhub_access" and sends it as x-mhub-access on API
-    // calls. Cache the value so we use the real token instead of the null GUID.
-    // Handle both "set-cookie" (Paperback-normalised) and "Set-Cookie" (raw iOS).
+    // MangaHub sets mhub_access via Set-Cookie on every mangahub.io response.
+    // Extract it here so getMhubToken() can use it as the x-mhub-access header.
     const setCookie =
       (response.headers?.["set-cookie"] as string | undefined) ??
       (response.headers?.["Set-Cookie"] as string | undefined) ??

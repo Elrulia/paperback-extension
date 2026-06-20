@@ -136,8 +136,8 @@ function deriveContentRating(genreIds: Set<string>): ContentRating {
 
 export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   mainRateLimiter = new BasicRateLimiter("main", {
-    numberOfRequests: 10,
-    bufferInterval: 1,
+    numberOfRequests: 2,
+    bufferInterval: 8,
     ignoreImages: true,
   });
 
@@ -150,7 +150,7 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     this.mainInterceptor.registerInterceptor();
     // Eagerly refresh the token on startup so chapter loads don't start with
     // the null GUID fallback (which exhausts its rate limit in ~1 chapter).
-    void this.refreshMhubToken();
+    //void this.refreshMhubToken();
   }
 
   // Paperback calls this after the user completes the WebView bypass session.
@@ -158,17 +158,12 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     for (const cookie of cookies) {
       this.cookieStorageInterceptor.deleteCookie(cookie);
     }
+
     for (const cookie of cookies) {
-      if (
-        cookie.name.startsWith("cf") ||
-        cookie.name.startsWith("_cf") ||
-        cookie.name.startsWith("__cf")
-      ) {
-        this.cookieStorageInterceptor.setCookie(cookie);
-      }
-      // The bypass WebView receives a server-assigned mhub_access token from
-      // mangahub.io. Save its value so the retry uses it as x-mhub-access,
-      // giving the request a potentially fresh rate-limit bucket.
+      this.cookieStorageInterceptor.setCookie(cookie);
+      // mhub_access is a mangahub.io cookie but must be sent as the x-mhub-access
+      // header to api.mghcdn.com — CookieStorageInterceptor won't cross domains,
+      // so also persist the value in state for getMhubToken() to pick up.
       if (cookie.name === "mhub_access" && cookie.value) {
         Application.setState(cookie.value, "mhubToken");
       }
