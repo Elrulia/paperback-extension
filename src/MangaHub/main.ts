@@ -190,8 +190,8 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     metadata: JSONValue | undefined,
   ): Promise<PagedResults<DiscoverSectionItem>> {
     if (section.id === "latest") {
-      const page = (metadata as number | undefined) ?? 1;
-      return this.fetchLatestViaApi(page);
+      const m = metadata as { page: number; seen: string[] } | undefined;
+      return this.fetchLatestViaApi(m?.page ?? 1, new Set<string>(m?.seen ?? []));
     }
 
     const page = (metadata as number | undefined) ?? 1;
@@ -225,10 +225,10 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     return { items, metadata: hasNext ? page + 1 : undefined };
   }
 
-  // Fetches latest-updated manga via the GraphQL API's search(mod: LATEST) query,
-  // which returns one entry per unique manga — never duplicates.
-  // The 0.8 extension uses this same query for all pages (aliased to "latest").
-  async fetchLatestViaApi(page: number): Promise<PagedResults<DiscoverSectionItem>> {
+  // The API's search(mod: LATEST) returns one row per chapter update, so the same
+  // manga can appear many times. seenIds carries already-shown slugs across pages
+  // so every manga appears at most once — mirroring the 0.8 extension's collectedIds.
+  async fetchLatestViaApi(page: number, seenIds: Set<string>): Promise<PagedResults<DiscoverSectionItem>> {
     const token = await this.getMhubToken();
     const offset = (page - 1) * 30;
     type MangaRow = { title?: string; slug?: string; image?: string };
@@ -253,17 +253,21 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     };
     if (json.errors?.[0]) throw new Error(json.errors[0].message);
 
-    const rows = json.data?.search?.rows ?? [];
-    const items: DiscoverSectionItem[] = rows
-      .filter((m) => m.slug && m.title)
-      .map((m) => ({
-        mangaId: m.slug!,
-        title: m.title!,
+    const rawRows = json.data?.search?.rows ?? [];
+    const items: DiscoverSectionItem[] = [];
+    for (const m of rawRows) {
+      if (!m.slug || !m.title || seenIds.has(m.slug)) continue;
+      seenIds.add(m.slug);
+      items.push({
+        mangaId: m.slug,
+        title: m.title,
         imageUrl: m.image ? `${THUMB_CDN}${m.image}` : NO_COVER,
         type: "simpleCarouselItem" as const,
-      }));
+      });
+    }
 
-    return { items, metadata: rows.length >= 30 ? page + 1 : undefined };
+    const hasMore = rawRows.length >= 30;
+    return { items, metadata: hasMore ? { page: page + 1, seen: [...seenIds] } : undefined };
   }
 
   async getSortingOptions(_query: SearchQuery<JSONValue>): Promise<SortingOption[]> {
