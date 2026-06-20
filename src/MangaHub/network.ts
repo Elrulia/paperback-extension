@@ -1,4 +1,4 @@
-﻿/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 
 import { CloudflareError, PaperbackInterceptor, type Request, type Response } from "@paperback/types";
 
@@ -42,19 +42,11 @@ export class MainInterceptor extends PaperbackInterceptor {
       );
     }
 
-    // MangaHub sets mhub_access via Set-Cookie on every mangahub.io response.
-    // Extract it here so getMhubToken() can use it as the x-mhub-access header.
-    const setCookie =
-      (response.headers?.["set-cookie"] as string | undefined) ??
-      (response.headers?.["Set-Cookie"] as string | undefined) ??
-      "";
-    if (setCookie) {
-      console.log("[MH] set-cookie:", setCookie.slice(0, 80));
-    }
-    const tokenMatch = setCookie.match(/mhub_access=([a-f0-9-]+)/i);
-    if (tokenMatch?.[1]) {
-      Application.setState(tokenMatch[1], "mhubToken");
-      console.log("[MH] token from set-cookie:", tokenMatch[1].slice(0, 8) + "...");
+    // iOS strips Set-Cookie from response.headers, but Paperback populates
+    // response.cookies from it before passing to interceptors.
+    const mhubCookie = response.cookies.find((c) => c.name === "mhub_access");
+    if (mhubCookie?.value) {
+      Application.setState(mhubCookie.value, "mhubToken");
     }
 
     return data;

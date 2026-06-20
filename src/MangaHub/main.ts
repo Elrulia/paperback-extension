@@ -2,7 +2,6 @@
 
 import {
   BasicRateLimiter,
-  CloudflareError,
   ContentRating,
   CookieStorageInterceptor,
   DiscoverSectionType,
@@ -155,28 +154,18 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
 
   // Paperback calls this after the user completes the WebView bypass session.
   async saveCloudflareBypassCookies(cookies: Cookie[]): Promise<void> {
-    console.log("[MH] bypass cookies:", JSON.stringify(cookies.map((c) => ({ name: c.name, domain: c.domain, hasValue: !!c.value }))));
-
     for (const cookie of cookies) {
       try {
         this.cookieStorageInterceptor.deleteCookie(cookie);
-      } catch (e) {
-        console.log("[MH] deleteCookie crash on:", cookie.name, String(e));
+      } catch {
+        // some bypass cookies may lack domain
       }
     }
-
     for (const cookie of cookies) {
       this.cookieStorageInterceptor.setCookie(cookie);
       if (cookie.name === "mhub_access" && cookie.value) {
         Application.setState(cookie.value, "mhubToken");
-        console.log("[MH] saved mhub_access:", cookie.value.slice(0, 8) + "...");
       }
-    }
-
-    const stateAfter = (Application.getState("mhubToken") as string | undefined);
-    console.log("[MH] state after bypass:", stateAfter?.slice(0, 8) ?? "NOT SET");
-    if (!stateAfter) {
-      throw new Error(`Bypass complete but mhub_access NOT found in cookies. Got: ${cookies.map((c) => c.name).join(", ")}`);
     }
   }
 
@@ -416,14 +405,16 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
   }
 
   async getMhubToken(): Promise<string> {
-    const token = (Application.getState("mhubToken") as string | undefined) ?? "00000000-0000-0000-0000-000000000000";
-    console.log("[MH] getMhubToken:", token.slice(0, 8) + "...");
-    return token;
+    return (Application.getState("mhubToken") as string | undefined) ?? "00000000-0000-0000-0000-000000000000";
   }
 
-  // Clears the cached token and refetches mangahub.io so interceptResponse can
-  // extract a fresh mhub_access from Set-Cookie. Mirrors 0.8 refreshAPIKey().
+  // Mirrors 0.8's refreshAPIKey(): delete the stale mhub_access cookie so the
+  // server issues a fresh one, then GET mangahub.io. Paperback populates
+  // response.cookies from Set-Cookie before passing to interceptors, so
+  // interceptResponse captures the new token automatically.
   async refreshMhubToken(): Promise<void> {
+    const old = this.cookieStorageInterceptor.cookiesForUrl(`${BASE_URL}/`).find((c) => c.name === "mhub_access");
+    if (old) this.cookieStorageInterceptor.deleteCookie(old);
     Application.setState(undefined, "mhubToken");
     await Application.scheduleRequest({ url: `${BASE_URL}/`, method: "GET" });
   }
@@ -463,11 +454,7 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     }
 
     if (result.errMsg) {
-      const debugToken = await this.getMhubToken();
-      throw new CloudflareError(
-        { url: `${BASE_URL}/chapter/${slug}/chapter-${num}?reloadKey=1`, method: "GET" },
-        `${result.errMsg} | token=${debugToken.slice(0, 8)}`,
-      );
+      throw new Error(result.errMsg);
     }
 
     const pages: string[] = [];
