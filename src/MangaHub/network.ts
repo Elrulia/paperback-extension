@@ -41,6 +41,15 @@ export class MainInterceptor extends PaperbackInterceptor {
       );
     }
 
+    // MangaHub assigns a per-IP session token via Set-Cookie on every mangahub.io
+    // response. The SPA reads "mhub_access" and sends it as x-mhub-access on API
+    // calls. Cache it so we use the real token instead of the null GUID (rate-limited).
+    const setCookie = (response.headers?.["set-cookie"] as string | undefined) ?? "";
+    const tokenMatch = setCookie.match(/mhub_access=([a-f0-9]+)/i);
+    if (tokenMatch?.[1]) {
+      Application.setState(tokenMatch[1], "mhubToken");
+    }
+
     return data;
   }
 }

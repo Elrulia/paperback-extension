@@ -363,9 +363,18 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     return chapters;
   }
 
+  async getMhubToken(): Promise<string> {
+    const cached = Application.getState("mhubToken") as string | undefined;
+    if (cached) return cached;
+    // Token not yet cached — fetch the homepage; interceptResponse extracts it.
+    await Application.scheduleRequest({ url: BASE_URL + "/", method: "GET" });
+    return (Application.getState("mhubToken") as string | undefined) ?? "00000000-0000-0000-0000-000000000000";
+  }
+
   async getChapterDetails(chapter: Chapter): Promise<ChapterDetails> {
     const slug = chapter.sourceManga.mangaId;
     const num = chapter.chapterId;
+    const token = await this.getMhubToken();
 
     const [, data] = await Application.scheduleRequest({
       url: API_URL,
@@ -373,7 +382,7 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
       headers: {
         "content-type": "application/json",
         accept: "application/json",
-        "x-mhub-access": "00000000-0000-0000-0000-000000000000",
+        "x-mhub-access": token,
         origin: BASE_URL,
       },
       body: JSON.stringify({
