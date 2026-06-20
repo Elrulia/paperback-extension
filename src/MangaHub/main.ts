@@ -155,6 +155,10 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
 
   // Paperback calls this after the user completes the WebView bypass session.
   async saveCloudflareBypassCookies(cookies: Cookie[]): Promise<void> {
+    const names = cookies.map((c) => c.name).join(",");
+    const mhub = cookies.find((c) => c.name === "mhub_access");
+    Application.setState(`cookies=[${names}] mhub=${mhub?.value?.slice(0, 8) ?? "NOT_FOUND"}`, "bypassDebug");
+
     for (const cookie of cookies) {
       try {
         this.cookieStorageInterceptor.deleteCookie(cookie);
@@ -462,9 +466,10 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     }
 
     if (result.errMsg) {
+      const bypassDebug = (Application.getState("bypassDebug") as string | undefined) ?? "bypass_not_called_yet";
       throw new CloudflareError(
         { url: `${BASE_URL}/chapter/${slug}/chapter-${num}?reloadKey=1`, method: "GET" },
-        result.errMsg,
+        `${result.errMsg} | token=${(await this.getMhubToken()).slice(0, 8)} | ${bypassDebug}`,
       );
     }
 
