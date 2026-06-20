@@ -416,11 +416,13 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     const old = this.cookieStorageInterceptor.cookiesForUrl(`${BASE_URL}/`).find((c) => c.name === "mhub_access");
     if (old) this.cookieStorageInterceptor.deleteCookie(old);
     Application.setState(undefined, "mhubToken");
-    // Use a chapter page with ?reloadKey=1, same as 0.8's refreshAPIKey().
-    // The server issues a fresh mhub_access on this URL; homepage may not.
+    // Send mhub_access="" (empty) to mirror 0.8's refreshAPIKey() which sends
+    // Cookie: mhub_access=; Max-Age=0 — an expired/empty cookie signals the
+    // server to issue a fresh token rather than renewing the same session.
     await Application.scheduleRequest({
-      url: `${BASE_URL}/chapter/the-last-human/chapter-1?reloadKey=1`,
+      url: `${BASE_URL}/`,
       method: "GET",
+      cookies: { mhub_access: "" },
     });
   }
 
