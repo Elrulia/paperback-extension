@@ -2,6 +2,7 @@
 
 import {
   BasicRateLimiter,
+  CloudflareError,
   ContentRating,
   CookieStorageInterceptor,
   DiscoverSectionType,
@@ -461,12 +462,10 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     }
 
     if (result.errMsg) {
-      const tokenAfter = await this.getMhubToken();
-      const cookiesAfter = this.cookieStorageInterceptor
-        .cookiesForUrl(`${BASE_URL}/`)
-        .map((c) => `${c.name}=${c.value?.slice(0, 6)}`)
-        .join(", ");
-      throw new Error(`${result.errMsg} | after-refresh token=${tokenAfter.slice(0, 8)} | cookies=[${cookiesAfter || "none"}]`);
+      throw new CloudflareError(
+        { url: `${BASE_URL}/chapter/${slug}/chapter-${num}?reloadKey=1`, method: "GET" },
+        result.errMsg,
+      );
     }
 
     const pages: string[] = [];
