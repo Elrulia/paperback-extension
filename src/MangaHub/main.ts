@@ -2,7 +2,6 @@
 
 import {
   BasicRateLimiter,
-  CloudflareError,
   ContentRating,
   CookieStorageInterceptor,
   DiscoverSectionType,
@@ -24,7 +23,7 @@ import {
 import * as cheerio from "cheerio";
 
 import { MangaHubSearchForm, type MangaHubSearchMetadata } from "./forms";
-import { API_DOMAIN, MainInterceptor } from "./network";
+import { MainInterceptor } from "./network";
 import type MangaHubConfig from "./pbconfig";
 
 const BASE_URL = "https://mangahub.io";
@@ -368,36 +367,53 @@ export class MangaHubExtension implements ExtensionImpl<typeof MangaHubConfig> {
     const slug = chapter.sourceManga.mangaId;
     const num = chapter.chapterId;
 
-    const [, data] = await Application.scheduleRequest({
-      url: API_URL,
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json",
-        "x-mhub-access": "00000000-0000-0000-0000-000000000000",
-        origin: BASE_URL,
-      },
-      body: JSON.stringify({
-        query: `{ chapter(x: m01, slug: "${slug}", number: ${num}) { pages } }`,
-      }),
+    // Cloudflare only challenges POST /graphql from non-browser stacks (URLSession).
+    // A cross-origin fetch issued from inside a real WebKit context is indistinguishable
+    // from the MangaHub SPA itself — Cloudflare lets it through without a challenge.
+    const requestBody = JSON.stringify({
+      query: `{ chapter(x: m01, slug: "${slug}", number: ${num}) { pages } }`,
     });
 
-    // CloudflareError is thrown by the interceptor before we get here if the response is HTML.
-    // Handle server-side errors (rate limit, null chapter) gracefully.
-    const json = JSON.parse(Application.arrayBufferToUTF8String(data)) as {
+    const { result } = await Application.executeInWebView({
+      source: {
+        html: "<!DOCTYPE html><html><body></body></html>",
+        baseUrl: BASE_URL,
+        loadCSS: false,
+        loadImages: false,
+      },
+      inject: `(async () => {
+        try {
+          const r = await fetch(${JSON.stringify(API_URL)}, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Accept": "application/json",
+              "x-mhub-access": "00000000-0000-0000-0000-000000000000",
+              "Origin": ${JSON.stringify(BASE_URL)},
+              "Referer": ${JSON.stringify(BASE_URL + "/")}
+            },
+            body: ${JSON.stringify(requestBody)}
+          });
+          return r.ok ? r.json() : { httpError: r.status };
+        } catch (err) {
+          return { fetchError: String(err) };
+        }
+      })()`,
+      storage: { cookies: [] },
+    });
+
+    const json = result as {
       data?: { chapter?: { pages?: string } | null };
       errors?: { message: string }[];
+      httpError?: number;
+      fetchError?: string;
     };
 
+    if (json.fetchError !== undefined) throw new Error(json.fetchError);
+    if (json.httpError !== undefined) throw new Error(`API returned HTTP ${json.httpError}`);
+
     const errMsg = json.errors?.[0]?.message;
-    if (errMsg) {
-      // Rate limit comes from api.mghcdn.com — bypass must target that domain so
-      // saveCloudflareBypassCookies stores cf_clearance for the API, not mangahub.io.
-      throw new CloudflareError(
-        { url: `${API_DOMAIN}/`, method: "GET" },
-        errMsg,
-      );
-    }
+    if (errMsg) throw new Error(errMsg);
 
     const pagesJson = json.data?.chapter?.pages;
     const pages: string[] = [];
