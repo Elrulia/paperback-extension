@@ -254,28 +254,17 @@ export class MangaHubExtension implements MangaHubImplementation {
   private async graphQL(query: string, mangaSlug?: string): Promise<MangaHubGqlResponse> {
     if (!this.accessKey) await this.refreshAccessKey(mangaSlug);
 
-    let lastError: Error | undefined;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const result = await this.postGraphQL(query);
-      const errorText = this.gqlErrorText(result);
-      const rateLimited = /rate\s*limit|api\s*key/.test(errorText);
+    const result = await this.postGraphQL(query);
+    const errorText = this.gqlErrorText(result);
 
-      if (!errorText) return result;
+    if (!errorText) return result;
 
-      if (rateLimited) {
-        lastError = new Error(errorText);
-        if (attempt >= 1 && GRAPHQL_URLS.length > 1) {
-          this.endpointIndex = (this.endpointIndex + 1) % GRAPHQL_URLS.length;
-        }
-        await new Promise((r) => setTimeout(r, (attempt + 1) * 3000));
-        await this.refreshAccessKey(mangaSlug);
-        continue;
-      }
-
-      throw new Error(errorText);
+    if (/rate\s*limit|api\s*key/.test(errorText)) {
+      await this.refreshAccessKey(mangaSlug);
+      throw new Error("MangaHub rate limit reached. Please try again.");
     }
 
-    throw lastError ?? new Error("MangaHub: request failed");
+    throw new Error(errorText);
   }
 
   private gqlErrorText(result: MangaHubGqlResponse): string {
