@@ -156,8 +156,8 @@ export class MangaHubExtension implements MangaHubImplementation {
   requestManager: MangaHubInterceptor;
   cookieStorageInterceptor = new CookieStorageInterceptor({ storage: "stateManager" });
   globalRateLimiter = new BasicRateLimiter("rateLimiter", {
-    numberOfRequests: 5,
-    bufferInterval: 4,
+    numberOfRequests: 3,
+    bufferInterval: 6,
     ignoreImages: true,
   });
 
@@ -267,6 +267,7 @@ export class MangaHubExtension implements MangaHubImplementation {
         if (attempt >= 1 && GRAPHQL_URLS.length > 1) {
           this.endpointIndex = (this.endpointIndex + 1) % GRAPHQL_URLS.length;
         }
+        await new Promise((r) => setTimeout(r, (attempt + 1) * 3000));
         await this.refreshAccessKey(mangaSlug);
         continue;
       }
