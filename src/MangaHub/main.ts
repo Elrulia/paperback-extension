@@ -209,28 +209,25 @@ export class MangaHubExtension implements MangaHubImplementation {
       path: "/",
     });
 
-    const base = mangaSlug ? `${this.baseUrl}/manga/${mangaSlug}` : `${this.baseUrl}/`;
-    const path = base + (base.includes("?") ? "&" : "?") + "reloadKey=1";
+    const chapterPath = mangaSlug
+      ? `${this.baseUrl}/chapter/${mangaSlug}/chapter-1?reloadKey=1`
+      : `${this.baseUrl}/chapter/the-last-human/chapter-1?reloadKey=1`;
 
-    const [response] = await Application.scheduleRequest({ url: path, method: "GET" });
+    const [response] = await Application.scheduleRequest({
+      url: chapterPath,
+      method: "GET",
+      headers: { "cookie": "mhub_access=; Path=/" },
+    });
 
     let key = "";
     for (const cookie of response.cookies ?? []) {
       if (cookie.name === "mhub_access" && cookie.value) { key = cookie.value; break; }
     }
-    if (!key) key = this.findStoredCookieKey();
 
     if (key) {
       this.accessKey = key;
       Application.setState(key, ACCESS_KEY_STATE);
     }
-  }
-
-  private findStoredCookieKey(): string {
-    for (const cookie of this.cookieStorageInterceptor.cookies) {
-      if (cookie.name === "mhub_access" && cookie.value) return cookie.value;
-    }
-    return "";
   }
 
   private randomInteger(min: number, max: number): number {
