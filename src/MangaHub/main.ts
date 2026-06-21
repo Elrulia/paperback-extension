@@ -46,7 +46,7 @@ const IMAGE_CDN = "https://imgx.mghcdn.com";
 const THUMB_CDN = "https://thumb.mghcdn.com";
 const PER_PAGE = 30;
 const ACCESS_KEY_STATE = "mangahub.accessKey";
-const RELOAD_KEY_STATE = "mangahub.reloadKey";
+
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -142,7 +142,6 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   private accessKey = "";
   private currentUserAgent = "";
-  private useReloadKeyParam = false;
   private endpointIndex = 0;
 
   get baseUrl(): string {
@@ -186,8 +185,6 @@ export class MangaHubExtension implements MangaHubImplementation {
 
     const stored = Application.getState(ACCESS_KEY_STATE);
     if (typeof stored === "string" && stored.length > 0) this.accessKey = stored;
-    const reload = Application.getState(RELOAD_KEY_STATE);
-    if (typeof reload === "boolean") this.useReloadKeyParam = reload;
   }
 
   // ----------------------------------------------------------------
@@ -196,8 +193,6 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   private async refreshAccessKey(mangaSlug?: string): Promise<void> {
     this.currentUserAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]!;
-
-    const previousKey = this.findStoredCookieKey();
 
     for (const cookie of this.cookieStorageInterceptor.cookies) {
       if (cookie.name === "mhub_access") this.cookieStorageInterceptor.deleteCookie(cookie);
@@ -214,8 +209,8 @@ export class MangaHubExtension implements MangaHubImplementation {
       path: "/",
     });
 
-    let path = mangaSlug ? `${this.baseUrl}/manga/${mangaSlug}` : `${this.baseUrl}/`;
-    if (this.useReloadKeyParam) path += (path.includes("?") ? "&" : "?") + "reloadKey=1";
+    const base = mangaSlug ? `${this.baseUrl}/manga/${mangaSlug}` : `${this.baseUrl}/`;
+    const path = base + (base.includes("?") ? "&" : "?") + "reloadKey=1";
 
     const [response] = await Application.scheduleRequest({ url: path, method: "GET" });
 
@@ -224,11 +219,6 @@ export class MangaHubExtension implements MangaHubImplementation {
       if (cookie.name === "mhub_access" && cookie.value) { key = cookie.value; break; }
     }
     if (!key) key = this.findStoredCookieKey();
-
-    if (!key || key === previousKey) {
-      this.useReloadKeyParam = !this.useReloadKeyParam;
-      Application.setState(this.useReloadKeyParam, RELOAD_KEY_STATE);
-    }
 
     if (key) {
       this.accessKey = key;
