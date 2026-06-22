@@ -327,13 +327,17 @@ export class MangaHubExtension implements MangaHubImplementation {
     const page = typeof (metadata as { page?: number } | undefined)?.page === "number"
       ? (metadata as { page: number }).page : 1;
 
-    // Latest always uses search(mod:LATEST) for every page so offsets are consistent
-    // and there is no cross-page overlap from mixing two different endpoints.
+    // Latest always uses search(mod:LATEST) for every page so offsets are consistent.
+    // Seen IDs are accumulated in metadata so cross-page duplicates are also filtered.
     if (section.id === "latest") {
+      const meta = metadata as { page?: number; seenIds?: number[] } | undefined;
+      const previousSeenIds = new Set<number>(meta?.seenIds ?? []);
       const rows = await this.runSearch("", "all", "LATEST", page);
+      const items = this.toDiscoverItems(rows, "simpleCarouselItem", true, previousSeenIds);
+      const allSeenIds = [...previousSeenIds, ...rows.flatMap(r => r.id !== undefined ? [r.id] : [])];
       return {
-        items: this.toDiscoverItems(rows, "simpleCarouselItem", true),
-        metadata: rows.length === PER_PAGE ? { page: page + 1 } : undefined,
+        items,
+        metadata: rows.length === PER_PAGE ? { page: page + 1, seenIds: allSeenIds } : undefined,
       };
     }
 
@@ -393,9 +397,10 @@ export class MangaHubExtension implements MangaHubImplementation {
     rows: MangaHubMangaDto[],
     type: "featuredCarouselItem" | "simpleCarouselItem",
     dedupSlugs = false,
+    previousSeenIds: ReadonlySet<number> = new Set(),
   ): DiscoverSectionItem[] {
     const seenSlugs = new Set<string>();
-    const seenIds = new Set<number>();
+    const seenIds = new Set<number>(previousSeenIds);
     const items: DiscoverSectionItem[] = [];
     for (const row of rows) {
       const slug = row.slug ?? "";
