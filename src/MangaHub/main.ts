@@ -1,10 +1,10 @@
-import {
+﻿import {
   BasicRateLimiter,
   CloudflareError,
   ContentRating,
   CookieStorageInterceptor,
   DiscoverSectionType,
-  Form,
+  type Form,
   PaperbackInterceptor,
 } from "@paperback/types";
 import type {
@@ -58,6 +58,7 @@ const USER_AGENTS = [
 
 interface GqlError { message?: string }
 interface MangaHubMangaDto {
+  id?: number;
   title?: string; slug?: string; status?: string; image?: string;
   author?: string; artist?: string; genres?: string; description?: string;
   alternativeTitle?: string; latestChapter?: number; chapters?: MangaHubChapterDto[];
@@ -69,6 +70,12 @@ interface MangaHubGqlResponse {
     search?: { rows?: MangaHubMangaDto[] };
     manga?: MangaHubMangaDto;
     chapter?: MangaHubChapterPagesDto;
+    // Home batch query aliases
+    popularUpdates?: MangaHubMangaDto[];
+    latest?: MangaHubMangaDto[];
+    popular?: { rows?: MangaHubMangaDto[] };
+    newManga?: { rows?: MangaHubMangaDto[] };
+    completed?: { rows?: MangaHubMangaDto[] };
   };
   errors?: GqlError[];
 }
@@ -143,6 +150,7 @@ export class MangaHubExtension implements MangaHubImplementation {
   private accessKey = "";
   private currentUserAgent = "";
   private endpointIndex = 0;
+  private homeCache: MangaHubGqlResponse["data"] | null = null;
 
   get baseUrl(): string {
     return getBaseUrlOverride(this.sourceName) ?? this.defaultBaseUrl;
@@ -194,20 +202,12 @@ export class MangaHubExtension implements MangaHubImplementation {
   private async refreshAccessKey(mangaSlug?: string): Promise<void> {
     this.currentUserAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]!;
 
-    for (const cookie of this.cookieStorageInterceptor.cookies) {
-      if (cookie.name === "mhub_access") this.cookieStorageInterceptor.deleteCookie(cookie);
+    // Clear ALL stored cookies before refresh so CookieStorageInterceptor
+    // does not inject stale cookies into the request (mirrors Netsky 0.8).
+    const savedCookies = [...this.cookieStorageInterceptor.cookies];
+    for (const cookie of savedCookies) {
+      try { this.cookieStorageInterceptor.deleteCookie(cookie); } catch { /* no domain */ }
     }
-
-    const now = Date.now();
-    const recentlyValue = encodeURIComponent(
-      `{"${now - this.randomInteger(0, 1200)}":{"mangaID":${this.randomInteger(1, 30000)},"number":1}}`,
-    );
-    this.cookieStorageInterceptor.setCookie({
-      name: "recently",
-      value: recentlyValue,
-      domain: this.cookieDomain(),
-      path: "/",
-    });
 
     const chapterPath = mangaSlug
       ? `${this.baseUrl}/chapter/${mangaSlug}/chapter-1?reloadKey=1`
@@ -216,26 +216,37 @@ export class MangaHubExtension implements MangaHubImplementation {
     const [response] = await Application.scheduleRequest({
       url: chapterPath,
       method: "GET",
-      headers: { "cookie": "mhub_access=; Path=/" },
+      headers: {
+        "cookie": "mhub_access=; Path=/",
+        "x-mhub-access": "mhub_access=; Path=/",
+      },
     });
 
+    // Restore non-mhub_access cookies (e.g. Cloudflare cookies) after refresh.
+    for (const cookie of savedCookies) {
+      if (cookie.name !== "mhub_access") {
+        try { this.cookieStorageInterceptor.setCookie(cookie); } catch { /* ignore */ }
+      }
+    }
+
+    // Try raw Set-Cookie header first (like Netsky 0.8), fall back to parsed cookies.
     let key = "";
-    for (const cookie of response.cookies ?? []) {
-      if (cookie.name === "mhub_access" && cookie.value) { key = cookie.value; break; }
+    const rawSetCookie = (response.headers as Record<string, string>)?.["set-cookie"]
+      ?? (response.headers as Record<string, string>)?.["Set-Cookie"]
+      ?? "";
+    const headerMatch = /mhub_access=([^;]+)/.exec(rawSetCookie);
+    if (headerMatch?.[1]) {
+      key = headerMatch[1];
+    } else {
+      for (const cookie of response.cookies ?? []) {
+        if (cookie.name === "mhub_access" && cookie.value) { key = cookie.value; break; }
+      }
     }
 
     if (key) {
       this.accessKey = key;
       Application.setState(key, ACCESS_KEY_STATE);
     }
-  }
-
-  private randomInteger(min: number, max: number): number {
-    return Math.floor(Math.random() * (max - min + 1)) + min;
-  }
-
-  private cookieDomain(): string {
-    return this.baseUrl.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
   }
 
   private async graphQL(query: string, mangaSlug?: string): Promise<MangaHubGqlResponse> {
@@ -248,7 +259,7 @@ export class MangaHubExtension implements MangaHubImplementation {
 
     if (/rate\s*limit|api\s*key/.test(errorText)) {
       await this.refreshAccessKey(mangaSlug);
-      throw new Error("MangaHub rate limit reached. Please try again.");
+      throw new Error("MangaHub rate limit reached. Please try again. Can take a few retries.");
     }
 
     throw new Error(errorText);
@@ -301,8 +312,11 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   async getDiscoverSections(): Promise<DiscoverSection[]> {
     return [
-      { id: "popular_section", title: "Popular", type: DiscoverSectionType.featured },
-      { id: "latest_section", title: "Latest Updates", type: DiscoverSectionType.simpleCarousel },
+      { id: "popular",        title: "Popular",         type: DiscoverSectionType.featured },
+      { id: "latest",         title: "Latest Updates",  type: DiscoverSectionType.simpleCarousel },
+      { id: "popularUpdates", title: "Popular Updates", type: DiscoverSectionType.simpleCarousel },
+      { id: "newManga",       title: "New Manga",       type: DiscoverSectionType.simpleCarousel },
+      { id: "completed",      title: "Completed",       type: DiscoverSectionType.simpleCarousel },
     ];
   }
 
@@ -310,28 +324,98 @@ export class MangaHubExtension implements MangaHubImplementation {
     section: DiscoverSection,
     metadata: Metadata | undefined,
   ): Promise<PagedResults<DiscoverSectionItem>> {
-    let order: string;
-    let itemType: "featuredCarouselItem" | "simpleCarouselItem";
-    switch (section.id) {
-      case "popular_section": order = "POPULAR"; itemType = "featuredCarouselItem"; break;
-      case "latest_section":  order = "LATEST";  itemType = "simpleCarouselItem";  break;
-      default: return { items: [] };
-    }
-
     const page = typeof (metadata as { page?: number } | undefined)?.page === "number"
       ? (metadata as { page: number }).page : 1;
 
-    const rows = await this.runSearch("", "all", order, page);
+    // Latest always uses search(mod:LATEST) for every page so offsets are consistent.
+    // Seen IDs are accumulated in metadata so cross-page duplicates are also filtered.
+    if (section.id === "latest") {
+      const meta = metadata as { page?: number; seenIds?: number[] } | undefined;
+      const previousSeenIds = new Set<number>(meta?.seenIds ?? []);
+      const rows = await this.runSearch("", "all", "LATEST", page);
+      const items = this.toDiscoverItems(rows, "simpleCarouselItem", true, previousSeenIds);
+      const allSeenIds = [...previousSeenIds, ...rows.flatMap(r => r.id !== undefined ? [r.id] : [])];
+      return {
+        items,
+        metadata: rows.length === PER_PAGE ? { page: page + 1, seenIds: allSeenIds } : undefined,
+      };
+    }
 
+    // Page 1: use the cached single batch query for all other sections.
+    if (page === 1) {
+      if (!this.homeCache) {
+        const gql = `{
+          popularUpdates: latestPopular(x:${this.mangaSource}) { id title slug image latestChapter }
+          popular: search(x:${this.mangaSource},mod:POPULAR,limit:30) { rows { id title slug image latestChapter } }
+          newManga: search(x:${this.mangaSource},mod:NEW,limit:30) { rows { id title slug image latestChapter } }
+          completed: search(x:${this.mangaSource},mod:COMPLETED,limit:30) { rows { id title slug image latestChapter } }
+        }`;
+        const result = await this.graphQL(gql);
+        this.homeCache = result.data ?? null;
+      }
+
+      switch (section.id) {
+        case "popularUpdates": {
+          const rows = this.homeCache?.popularUpdates ?? [];
+          return { items: this.toDiscoverItems(rows, "simpleCarouselItem"), metadata: rows.length > 0 ? { page: 2 } : undefined };
+        }
+        case "popular": {
+          const rows = this.homeCache?.popular?.rows ?? [];
+          return { items: this.toDiscoverItems(rows, "featuredCarouselItem"), metadata: rows.length === PER_PAGE ? { page: 2 } : undefined };
+        }
+        case "newManga": {
+          const rows = this.homeCache?.newManga?.rows ?? [];
+          return { items: this.toDiscoverItems(rows, "simpleCarouselItem"), metadata: rows.length === PER_PAGE ? { page: 2 } : undefined };
+        }
+        case "completed": {
+          const rows = this.homeCache?.completed?.rows ?? [];
+          return { items: this.toDiscoverItems(rows, "simpleCarouselItem"), metadata: rows.length === PER_PAGE ? { page: 2 } : undefined };
+        }
+        default: return { items: [] };
+      }
+    }
+
+    // Page 2+: paginate via search.
+    // Popular Updates falls back to search(mod:POPULAR) since latestPopular() has no offset.
+    const orderMap: Record<string, string> = {
+      popular: "POPULAR",
+      popularUpdates: "POPULAR",
+      newManga: "NEW",
+      completed: "COMPLETED",
+    };
+    const order = orderMap[section.id];
+    if (!order) return { items: [] };
+
+    const rows = await this.runSearch("", "all", order, page);
+    return {
+      items: this.toDiscoverItems(rows, section.id === "popular" ? "featuredCarouselItem" : "simpleCarouselItem"),
+      metadata: rows.length === PER_PAGE ? { page: page + 1 } : undefined,
+    };
+  }
+
+  private toDiscoverItems(
+    rows: MangaHubMangaDto[],
+    type: "featuredCarouselItem" | "simpleCarouselItem",
+    dedupSlugs = false,
+    previousSeenIds: ReadonlySet<number> = new Set(),
+  ): DiscoverSectionItem[] {
+    const seenSlugs = new Set<string>();
+    const seenIds = new Set<number>(previousSeenIds);
     const items: DiscoverSectionItem[] = [];
     for (const row of rows) {
       const slug = row.slug ?? "";
+      if (!slug) continue;
       const imageUrl = this.thumbUrl(row.image);
-      if (!slug || !imageUrl) continue;
-      items.push({ type: itemType, mangaId: this.toSafeId(slug), imageUrl, title: row.title ?? "", metadata: undefined });
+      if (!imageUrl) continue;
+      if (dedupSlugs) {
+        if (seenSlugs.has(slug)) continue;
+        if (row.id !== undefined && seenIds.has(row.id)) continue;
+      }
+      seenSlugs.add(slug);
+      if (row.id !== undefined) seenIds.add(row.id);
+      items.push({ type, mangaId: this.toSafeId(slug), imageUrl, title: row.title ?? "", metadata: undefined });
     }
-
-    return { items, metadata: rows.length === PER_PAGE ? { page: page + 1 } : undefined };
+    return items;
   }
 
   // ----------------------------------------------------------------
@@ -349,7 +433,7 @@ export class MangaHubExtension implements MangaHubImplementation {
   }
 
   async getAdvancedSearchForm(query: SearchQuery<Metadata>): Promise<MangaHubSearchForm> {
-    const meta = (query.metadata as { searchMeta?: MangaHubSearchMeta } | undefined)?.searchMeta;
+    const meta = query.metadata as MangaHubSearchMeta | undefined;
     return new MangaHubSearchForm(meta);
   }
 
@@ -359,12 +443,12 @@ export class MangaHubExtension implements MangaHubImplementation {
     sortingOption?: { id: string; label: string },
   ): Promise<PagedResults<SearchResultItem>> {
     const titleQuery = (query.title || "").trim();
-    const searchMeta = (query.metadata as { searchMeta?: MangaHubSearchMeta } | undefined)?.searchMeta;
+    const searchMeta = query.metadata as MangaHubSearchMeta | undefined;
     const page = typeof (metadata as { page?: number } | undefined)?.page === "number"
       ? (metadata as { page: number }).page : 1;
 
-    const order = sortingOption?.id || searchMeta?.orderBy?.[0] || "POPULAR";
-    const genre = (searchMeta?.genre ?? "").trim() || "all";
+    const order = sortingOption?.id || "POPULAR";
+    const genre = searchMeta?.genre?.length ? searchMeta.genre.join(",") : "all";
 
     const rows = await this.runSearch(titleQuery, genre, order, page);
 
@@ -389,7 +473,7 @@ export class MangaHubExtension implements MangaHubImplementation {
     const offset = (page - 1) * PER_PAGE;
     const gql = `{
       search(x:${this.mangaSource},q:${JSON.stringify(queryText)},genre:${JSON.stringify(genre)},mod:${order},offset:${offset}) {
-        rows { title author slug image genres latestChapter }
+        rows { id title author slug image genres latestChapter }
       }
     }`;
     const result = await this.graphQL(gql);
