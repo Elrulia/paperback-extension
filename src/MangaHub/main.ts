@@ -1,10 +1,10 @@
-import {
+﻿import {
   BasicRateLimiter,
   CloudflareError,
   ContentRating,
   CookieStorageInterceptor,
   DiscoverSectionType,
-  Form,
+  type Form,
   PaperbackInterceptor,
 } from "@paperback/types";
 import type {
@@ -259,7 +259,7 @@ export class MangaHubExtension implements MangaHubImplementation {
 
     if (/rate\s*limit|api\s*key/.test(errorText)) {
       await this.refreshAccessKey(mangaSlug);
-      throw new Error("MangaHub rate limit reached. Please try again.");
+      throw new Error("MangaHub rate limit reached. Please try again. Can take a few retries.");
     }
 
     throw new Error(errorText);
