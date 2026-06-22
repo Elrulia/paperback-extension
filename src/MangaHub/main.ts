@@ -58,6 +58,7 @@ const USER_AGENTS = [
 
 interface GqlError { message?: string }
 interface MangaHubMangaDto {
+  id?: number;
   title?: string; slug?: string; status?: string; image?: string;
   author?: string; artist?: string; genres?: string; description?: string;
   alternativeTitle?: string; latestChapter?: number; chapters?: MangaHubChapterDto[];
@@ -390,15 +391,20 @@ export class MangaHubExtension implements MangaHubImplementation {
     type: "featuredCarouselItem" | "simpleCarouselItem",
     dedupSlugs = false,
   ): DiscoverSectionItem[] {
-    const seen = new Set<string>();
+    const seenSlugs = new Set<string>();
+    const seenIds = new Set<number>();
     const items: DiscoverSectionItem[] = [];
     for (const row of rows) {
       const slug = row.slug ?? "";
       if (!slug) continue;
-      if (dedupSlugs && seen.has(slug)) continue;
-      seen.add(slug);
       const imageUrl = this.thumbUrl(row.image);
       if (!imageUrl) continue;
+      if (dedupSlugs) {
+        if (seenSlugs.has(slug)) continue;
+        if (row.id !== undefined && seenIds.has(row.id)) continue;
+      }
+      seenSlugs.add(slug);
+      if (row.id !== undefined) seenIds.add(row.id);
       items.push({ type, mangaId: this.toSafeId(slug), imageUrl, title: row.title ?? "", metadata: undefined });
     }
     return items;
