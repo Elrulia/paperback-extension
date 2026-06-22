@@ -194,20 +194,12 @@ export class MangaHubExtension implements MangaHubImplementation {
   private async refreshAccessKey(mangaSlug?: string): Promise<void> {
     this.currentUserAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]!;
 
-    for (const cookie of this.cookieStorageInterceptor.cookies) {
-      if (cookie.name === "mhub_access") this.cookieStorageInterceptor.deleteCookie(cookie);
+    // Clear ALL stored cookies before refresh so CookieStorageInterceptor
+    // does not inject stale cookies into the request (mirrors Netsky 0.8).
+    const savedCookies = [...this.cookieStorageInterceptor.cookies];
+    for (const cookie of savedCookies) {
+      try { this.cookieStorageInterceptor.deleteCookie(cookie); } catch { /* no domain */ }
     }
-
-    const now = Date.now();
-    const recentlyValue = encodeURIComponent(
-      `{"${now - this.randomInteger(0, 1200)}":{"mangaID":${this.randomInteger(1, 30000)},"number":1}}`,
-    );
-    this.cookieStorageInterceptor.setCookie({
-      name: "recently",
-      value: recentlyValue,
-      domain: this.cookieDomain(),
-      path: "/",
-    });
 
     const chapterPath = mangaSlug
       ? `${this.baseUrl}/chapter/${mangaSlug}/chapter-1?reloadKey=1`
@@ -216,26 +208,37 @@ export class MangaHubExtension implements MangaHubImplementation {
     const [response] = await Application.scheduleRequest({
       url: chapterPath,
       method: "GET",
-      headers: { "cookie": "mhub_access=; Path=/" },
+      headers: {
+        "cookie": "mhub_access=; Path=/",
+        "x-mhub-access": "mhub_access=; Path=/",
+      },
     });
 
+    // Restore non-mhub_access cookies (e.g. Cloudflare cookies) after refresh.
+    for (const cookie of savedCookies) {
+      if (cookie.name !== "mhub_access") {
+        try { this.cookieStorageInterceptor.setCookie(cookie); } catch { /* ignore */ }
+      }
+    }
+
+    // Try raw Set-Cookie header first (like Netsky 0.8), fall back to parsed cookies.
     let key = "";
-    for (const cookie of response.cookies ?? []) {
-      if (cookie.name === "mhub_access" && cookie.value) { key = cookie.value; break; }
+    const rawSetCookie = (response.headers as Record<string, string>)?.["set-cookie"]
+      ?? (response.headers as Record<string, string>)?.["Set-Cookie"]
+      ?? "";
+    const headerMatch = /mhub_access=([^;]+)/.exec(rawSetCookie);
+    if (headerMatch?.[1]) {
+      key = headerMatch[1];
+    } else {
+      for (const cookie of response.cookies ?? []) {
+        if (cookie.name === "mhub_access" && cookie.value) { key = cookie.value; break; }
+      }
     }
 
     if (key) {
       this.accessKey = key;
       Application.setState(key, ACCESS_KEY_STATE);
     }
-  }
-
-  private randomInteger(min: number, max: number): number {
-    return Math.floor(Math.random() * (max - min + 1)) + min;
-  }
-
-  private cookieDomain(): string {
-    return this.baseUrl.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
   }
 
   private async graphQL(query: string, mangaSlug?: string): Promise<MangaHubGqlResponse> {
