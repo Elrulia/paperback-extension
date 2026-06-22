@@ -428,7 +428,7 @@ export class MangaHubExtension implements MangaHubImplementation {
   }
 
   async getAdvancedSearchForm(query: SearchQuery<Metadata>): Promise<MangaHubSearchForm> {
-    const meta = (query.metadata as { searchMeta?: MangaHubSearchMeta } | undefined)?.searchMeta;
+    const meta = query.metadata as MangaHubSearchMeta | undefined;
     return new MangaHubSearchForm(meta);
   }
 
@@ -438,12 +438,12 @@ export class MangaHubExtension implements MangaHubImplementation {
     sortingOption?: { id: string; label: string },
   ): Promise<PagedResults<SearchResultItem>> {
     const titleQuery = (query.title || "").trim();
-    const searchMeta = (query.metadata as { searchMeta?: MangaHubSearchMeta } | undefined)?.searchMeta;
+    const searchMeta = query.metadata as MangaHubSearchMeta | undefined;
     const page = typeof (metadata as { page?: number } | undefined)?.page === "number"
       ? (metadata as { page: number }).page : 1;
 
     const order = sortingOption?.id || searchMeta?.orderBy?.[0] || "POPULAR";
-    const genre = (searchMeta?.genre ?? "").trim() || "all";
+    const genre = searchMeta?.genre?.length ? searchMeta.genre.join(",") : "all";
 
     const rows = await this.runSearch(titleQuery, genre, order, page);
 
