@@ -1,6 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
-import { CloudflareError, PaperbackInterceptor, type Request, type Response } from "@paperback/types";
+import {
+  CloudflareError,
+  PaperbackInterceptor,
+  type Request,
+  type Response,
+} from "@paperback/types";
 
 export const MANGAHUB_DOMAIN = "https://mangahub.io";
 export const API_DOMAIN = "https://api.mghcdn.com";
