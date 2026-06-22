@@ -442,7 +442,7 @@ export class MangaHubExtension implements MangaHubImplementation {
     const page = typeof (metadata as { page?: number } | undefined)?.page === "number"
       ? (metadata as { page: number }).page : 1;
 
-    const order = sortingOption?.id || searchMeta?.orderBy?.[0] || "POPULAR";
+    const order = sortingOption?.id || "POPULAR";
     const genre = searchMeta?.genre?.length ? searchMeta.genre.join(",") : "all";
 
     const rows = await this.runSearch(titleQuery, genre, order, page);
