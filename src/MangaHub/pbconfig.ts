@@ -17,7 +17,5 @@ export default {
     SourceIntents.SETTINGS_FORM_PROVIDING,
   ],
   badges: [],
-  developers: [
-    { name: "Elrulia" },
-  ],
+  developers: [{ name: "Elrulia" }],
 } satisfies ExtensionInfo;
