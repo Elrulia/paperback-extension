@@ -14,12 +14,8 @@ export default {
     SourceIntents.CLOUDFLARE_BYPASS_PROVIDING,
     SourceIntents.DISCOVER_SECTION_PROVIDING,
     SourceIntents.SEARCH_RESULT_PROVIDING,
-    SourceIntents.SETTINGS_FORM_PROVIDING,
   ],
-  badges: [
-    { label: "Mature",        textColor: "#FFFFFF", backgroundColor: "#BD0A0A" },
-    { label: "Search Filter", textColor: "#FFFFFF", backgroundColor: "#2E7D32" },
-  ],
+  badges: [],
   developers: [
     { name: "Elrulia" },
   ],
