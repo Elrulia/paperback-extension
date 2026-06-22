@@ -468,7 +468,7 @@ export class MangaHubExtension implements MangaHubImplementation {
     const offset = (page - 1) * PER_PAGE;
     const gql = `{
       search(x:${this.mangaSource},q:${JSON.stringify(queryText)},genre:${JSON.stringify(genre)},mod:${order},offset:${offset}) {
-        rows { title author slug image genres latestChapter }
+        rows { id title author slug image genres latestChapter }
       }
     }`;
     const result = await this.graphQL(gql);
