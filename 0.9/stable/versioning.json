@@ -1,5 +1,5 @@
 {
-  "buildTime": "2026-06-22T15:18:17.585Z",
+  "buildTime": "2026-06-22T16:14:10.373Z",
   "builtWith": {
     "toolchain": "1.0.0-alpha.92",
     "types": "1.0.0-alpha.92"
@@ -20,21 +20,9 @@
         1,
         16,
         4,
-        64,
-        32
+        64
       ],
-      "badges": [
-        {
-          "label": "Mature",
-          "textColor": "#FFFFFF",
-          "backgroundColor": "#BD0A0A"
-        },
-        {
-          "label": "Search Filter",
-          "textColor": "#FFFFFF",
-          "backgroundColor": "#2E7D32"
-        }
-      ],
+      "badges": [],
       "developers": [
         {
           "name": "Elrulia"
