@@ -8,12 +8,20 @@ export default {
   version: "1.0.0",
   icon: "icon.png",
   language: "en",
-  contentRating: ContentRating.EVERYONE,
+  contentRating: ContentRating.MATURE,
   capabilities: [
+    SourceIntents.CHAPTER_PROVIDING,
+    SourceIntents.CLOUDFLARE_BYPASS_PROVIDING,
     SourceIntents.DISCOVER_SECTION_PROVIDING,
     SourceIntents.SEARCH_RESULT_PROVIDING,
-    SourceIntents.CHAPTER_PROVIDING,
+    SourceIntents.SETTINGS_FORM_PROVIDING,
   ],
-  badges: [],
-  developers: [],
+  badges: [
+    { label: "Mature",         textColor: "#FFFFFF", backgroundColor: "#BD0A0A" },
+    { label: "Web",            textColor: "#FFFFFF", backgroundColor: "#1D6ADE" },
+    { label: "Search Filter",  textColor: "#FFFFFF", backgroundColor: "#2E7D32" },
+  ],
+  developers: [
+    { name: "Elrulia" },
+  ],
 } satisfies ExtensionInfo;
