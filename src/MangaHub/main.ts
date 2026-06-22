@@ -69,6 +69,12 @@ interface MangaHubGqlResponse {
     search?: { rows?: MangaHubMangaDto[] };
     manga?: MangaHubMangaDto;
     chapter?: MangaHubChapterPagesDto;
+    // Home batch query aliases
+    popularUpdates?: MangaHubMangaDto[];
+    latest?: MangaHubMangaDto[];
+    popular?: { rows?: MangaHubMangaDto[] };
+    newManga?: { rows?: MangaHubMangaDto[] };
+    completed?: { rows?: MangaHubMangaDto[] };
   };
   errors?: GqlError[];
 }
@@ -143,6 +149,7 @@ export class MangaHubExtension implements MangaHubImplementation {
   private accessKey = "";
   private currentUserAgent = "";
   private endpointIndex = 0;
+  private homeCache: MangaHubGqlResponse["data"] | null = null;
 
   get baseUrl(): string {
     return getBaseUrlOverride(this.sourceName) ?? this.defaultBaseUrl;
@@ -304,8 +311,11 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   async getDiscoverSections(): Promise<DiscoverSection[]> {
     return [
-      { id: "popular_section", title: "Popular", type: DiscoverSectionType.featured },
-      { id: "latest_section", title: "Latest Updates", type: DiscoverSectionType.simpleCarousel },
+      { id: "popular",        title: "Popular",         type: DiscoverSectionType.featured },
+      { id: "latest",         title: "Latest Updates",  type: DiscoverSectionType.simpleCarousel },
+      { id: "popularUpdates", title: "Popular Updates", type: DiscoverSectionType.simpleCarousel },
+      { id: "newManga",       title: "New Manga",       type: DiscoverSectionType.simpleCarousel },
+      { id: "completed",      title: "Completed",       type: DiscoverSectionType.simpleCarousel },
     ];
   }
 
@@ -313,28 +323,77 @@ export class MangaHubExtension implements MangaHubImplementation {
     section: DiscoverSection,
     metadata: Metadata | undefined,
   ): Promise<PagedResults<DiscoverSectionItem>> {
-    let order: string;
-    let itemType: "featuredCarouselItem" | "simpleCarouselItem";
-    switch (section.id) {
-      case "popular_section": order = "POPULAR"; itemType = "featuredCarouselItem"; break;
-      case "latest_section":  order = "LATEST";  itemType = "simpleCarouselItem";  break;
-      default: return { items: [] };
-    }
-
     const page = typeof (metadata as { page?: number } | undefined)?.page === "number"
       ? (metadata as { page: number }).page : 1;
 
-    const rows = await this.runSearch("", "all", order, page);
+    // Page 1: use the cached single batch query for all sections.
+    if (page === 1) {
+      if (!this.homeCache) {
+        const gql = `{
+          popularUpdates: latestPopular(x:${this.mangaSource}) { id title slug image latestChapter }
+          latest: latest(x:${this.mangaSource},limit:30) { id title slug image latestChapter }
+          popular: search(x:${this.mangaSource},mod:POPULAR,limit:30) { rows { id title slug image latestChapter } }
+          newManga: search(x:${this.mangaSource},mod:NEW,limit:30) { rows { id title slug image latestChapter } }
+          completed: search(x:${this.mangaSource},mod:COMPLETED,limit:30) { rows { id title slug image latestChapter } }
+        }`;
+        const result = await this.graphQL(gql);
+        this.homeCache = result.data ?? null;
+      }
 
+      switch (section.id) {
+        case "popularUpdates": {
+          const rows = this.homeCache?.popularUpdates ?? [];
+          return { items: this.toDiscoverItems(rows, "simpleCarouselItem"), metadata: undefined };
+        }
+        case "latest": {
+          const rows = this.homeCache?.latest ?? [];
+          return { items: this.toDiscoverItems(rows, "simpleCarouselItem", true), metadata: undefined };
+        }
+        case "popular": {
+          const rows = this.homeCache?.popular?.rows ?? [];
+          return { items: this.toDiscoverItems(rows, "featuredCarouselItem"), metadata: rows.length === PER_PAGE ? { page: 2 } : undefined };
+        }
+        case "newManga": {
+          const rows = this.homeCache?.newManga?.rows ?? [];
+          return { items: this.toDiscoverItems(rows, "simpleCarouselItem"), metadata: rows.length === PER_PAGE ? { page: 2 } : undefined };
+        }
+        case "completed": {
+          const rows = this.homeCache?.completed?.rows ?? [];
+          return { items: this.toDiscoverItems(rows, "simpleCarouselItem"), metadata: rows.length === PER_PAGE ? { page: 2 } : undefined };
+        }
+        default: return { items: [] };
+      }
+    }
+
+    // Page 2+: paginate via search for sections that support it.
+    const orderMap: Record<string, string> = { popular: "POPULAR", newManga: "NEW", completed: "COMPLETED" };
+    const order = orderMap[section.id];
+    if (!order) return { items: [] };
+
+    const rows = await this.runSearch("", "all", order, page);
+    return {
+      items: this.toDiscoverItems(rows, section.id === "popular" ? "featuredCarouselItem" : "simpleCarouselItem"),
+      metadata: rows.length === PER_PAGE ? { page: page + 1 } : undefined,
+    };
+  }
+
+  private toDiscoverItems(
+    rows: MangaHubMangaDto[],
+    type: "featuredCarouselItem" | "simpleCarouselItem",
+    dedupSlugs = false,
+  ): DiscoverSectionItem[] {
+    const seen = new Set<string>();
     const items: DiscoverSectionItem[] = [];
     for (const row of rows) {
       const slug = row.slug ?? "";
+      if (!slug) continue;
+      if (dedupSlugs && seen.has(slug)) continue;
+      seen.add(slug);
       const imageUrl = this.thumbUrl(row.image);
-      if (!slug || !imageUrl) continue;
-      items.push({ type: itemType, mangaId: this.toSafeId(slug), imageUrl, title: row.title ?? "", metadata: undefined });
+      if (!imageUrl) continue;
+      items.push({ type, mangaId: this.toSafeId(slug), imageUrl, title: row.title ?? "", metadata: undefined });
     }
-
-    return { items, metadata: rows.length === PER_PAGE ? { page: page + 1 } : undefined };
+    return items;
   }
 
   // ----------------------------------------------------------------
