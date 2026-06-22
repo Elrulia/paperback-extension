@@ -17,9 +17,8 @@ export default {
     SourceIntents.SETTINGS_FORM_PROVIDING,
   ],
   badges: [
-    { label: "Mature",         textColor: "#FFFFFF", backgroundColor: "#BD0A0A" },
-    { label: "Web",            textColor: "#FFFFFF", backgroundColor: "#1D6ADE" },
-    { label: "Search Filter",  textColor: "#FFFFFF", backgroundColor: "#2E7D32" },
+    { label: "Mature",        textColor: "#FFFFFF", backgroundColor: "#BD0A0A" },
+    { label: "Search Filter", textColor: "#FFFFFF", backgroundColor: "#2E7D32" },
   ],
   developers: [
     { name: "Elrulia" },
