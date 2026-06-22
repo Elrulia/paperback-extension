@@ -327,12 +327,21 @@ export class MangaHubExtension implements MangaHubImplementation {
     const page = typeof (metadata as { page?: number } | undefined)?.page === "number"
       ? (metadata as { page: number }).page : 1;
 
-    // Page 1: use the cached single batch query for all sections.
+    // Latest always uses search(mod:LATEST) for every page so offsets are consistent
+    // and there is no cross-page overlap from mixing two different endpoints.
+    if (section.id === "latest") {
+      const rows = await this.runSearch("", "all", "LATEST", page);
+      return {
+        items: this.toDiscoverItems(rows, "simpleCarouselItem", true),
+        metadata: rows.length === PER_PAGE ? { page: page + 1 } : undefined,
+      };
+    }
+
+    // Page 1: use the cached single batch query for all other sections.
     if (page === 1) {
       if (!this.homeCache) {
         const gql = `{
           popularUpdates: latestPopular(x:${this.mangaSource}) { id title slug image latestChapter }
-          latest: latest(x:${this.mangaSource},limit:30) { id title slug image latestChapter }
           popular: search(x:${this.mangaSource},mod:POPULAR,limit:30) { rows { id title slug image latestChapter } }
           newManga: search(x:${this.mangaSource},mod:NEW,limit:30) { rows { id title slug image latestChapter } }
           completed: search(x:${this.mangaSource},mod:COMPLETED,limit:30) { rows { id title slug image latestChapter } }
@@ -345,10 +354,6 @@ export class MangaHubExtension implements MangaHubImplementation {
         case "popularUpdates": {
           const rows = this.homeCache?.popularUpdates ?? [];
           return { items: this.toDiscoverItems(rows, "simpleCarouselItem"), metadata: rows.length > 0 ? { page: 2 } : undefined };
-        }
-        case "latest": {
-          const rows = this.homeCache?.latest ?? [];
-          return { items: this.toDiscoverItems(rows, "simpleCarouselItem", true), metadata: rows.length === PER_PAGE ? { page: 2 } : undefined };
         }
         case "popular": {
           const rows = this.homeCache?.popular?.rows ?? [];
@@ -370,7 +375,6 @@ export class MangaHubExtension implements MangaHubImplementation {
     // Popular Updates falls back to search(mod:POPULAR) since latestPopular() has no offset.
     const orderMap: Record<string, string> = {
       popular: "POPULAR",
-      latest: "LATEST",
       popularUpdates: "POPULAR",
       newManga: "NEW",
       completed: "COMPLETED",
@@ -379,9 +383,8 @@ export class MangaHubExtension implements MangaHubImplementation {
     if (!order) return { items: [] };
 
     const rows = await this.runSearch("", "all", order, page);
-    const dedup = section.id === "latest";
     return {
-      items: this.toDiscoverItems(rows, section.id === "popular" ? "featuredCarouselItem" : "simpleCarouselItem", dedup),
+      items: this.toDiscoverItems(rows, section.id === "popular" ? "featuredCarouselItem" : "simpleCarouselItem"),
       metadata: rows.length === PER_PAGE ? { page: page + 1 } : undefined,
     };
   }
