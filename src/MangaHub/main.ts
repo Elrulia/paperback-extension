@@ -520,8 +520,8 @@ export class MangaHubExtension implements MangaHubImplementation {
     const results: SearchResultItem[] = [];
     for (const row of rows) {
       const slug = row.slug ?? "";
+      if (!slug) continue;
       const imageUrl = this.thumbUrl(row.image);
-      if (!slug || !imageUrl) continue;
       if (seenSlugs.has(slug)) continue;
       seenSlugs.add(slug);
       results.push({
