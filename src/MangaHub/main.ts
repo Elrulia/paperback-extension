@@ -630,7 +630,7 @@ export class MangaHubExtension implements MangaHubImplementation {
       if (seenChapNums.has(ch.number)) continue;
       seenChapNums.add(ch.number);
       const numberString = String(ch.number);
-      const chapterId = this.toSafeId(`${slug}/chapter-${numberString}`);
+      const chapterId = numberString;
       let title: string;
       if (useGeneric) {
         title = `Chapter ${numberString}`;
@@ -655,11 +655,8 @@ export class MangaHubExtension implements MangaHubImplementation {
   }
 
   async getChapterDetails(chapter: Chapter): Promise<ChapterDetails> {
-    const decoded = this.safeDecode(chapter.chapterId);
-    const parts = decoded.split("/");
-    const slug = parts[0]!;
-    const numberSegment = parts[parts.length - 1]!;
-    const number = parseFloat(numberSegment.replace(/^chapter-/, "")) || 0;
+    const slug = this.slugFromId(chapter.sourceManga.mangaId);
+    const number = parseFloat(chapter.chapterId) || 0;
 
     const gql = `{
       chapter(x:${this.mangaSource},slug:${JSON.stringify(slug)},number:${number}) {
