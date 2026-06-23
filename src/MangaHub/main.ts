@@ -584,7 +584,13 @@ export class MangaHubExtension implements MangaHubImplementation {
       tagGroups.push({
         id: "genres",
         title: "Genres",
-        tags: genres.map((g) => ({ id: g.toLowerCase().replace(/\s+/g, "-"), title: g })),
+        tags: genres.map((g) => ({
+          id: g
+            .toLowerCase()
+            .replace(/\s+/g, "-")
+            .replace(/[^a-z0-9._\-@()[\]%?#+=/&:]/g, ""),
+          title: g,
+        })),
       });
     }
 
