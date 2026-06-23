@@ -1,11 +1,4 @@
-import {
-  ButtonRow,
-  Form,
-  InputRow,
-  LabelRow,
-  Section,
-  ToggleRow,
-} from "@paperback/types";
+import { ButtonRow, Form, InputRow, LabelRow, Section, ToggleRow } from "@paperback/types";
 
 const BASE_URL_KEY_PREFIX = "mangahub.baseUrlOverride.";
 const GENERIC_TITLE_KEY_PREFIX = "mangahub.useGenericTitle.";
@@ -98,10 +91,10 @@ export class MangaHubSettingsForm extends Form {
           }),
           ButtonRow("base_url_reset", {
             title: "Reset to default",
-            onSelect: Application.Selector<
-              MangaHubSettingsForm,
-              () => Promise<void>
-            >(this, "resetOverride"),
+            onSelect: Application.Selector<MangaHubSettingsForm, () => Promise<void>>(
+              this,
+              "resetOverride",
+            ),
           }),
         ],
       ),
