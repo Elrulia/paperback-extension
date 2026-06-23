@@ -182,8 +182,8 @@ export class MangaHubExtension implements MangaHubImplementation {
   requestManager: MangaHubInterceptor;
   cookieStorageInterceptor = new CookieStorageInterceptor({ storage: "stateManager" });
   globalRateLimiter = new BasicRateLimiter("rateLimiter", {
-    numberOfRequests: 3,
-    bufferInterval: 6,
+    numberOfRequests: 10,
+    bufferInterval: 3,
     ignoreImages: true,
   });
 
