@@ -663,21 +663,36 @@ export class MangaHubExtension implements MangaHubImplementation {
         pages mangaID number manga { slug }
       }
     }`;
-    const result = await this.graphQL(gql, slug);
-    const pagesField = result.data?.chapter?.pages;
 
-    const pages: string[] = [];
-    if (pagesField) {
+    const MAX_RETRIES = 4;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const payload = JSON.parse(pagesField) as MangaHubPagesPayload;
-        const prefix = payload.p ?? "";
-        for (const img of payload.i ?? []) pages.push(`${IMAGE_CDN}/${prefix}${img}`);
-      } catch {
-        /* not valid JSON */
+        const result = await this.graphQL(gql, slug);
+        const pagesField = result.data?.chapter?.pages;
+
+        const pages: string[] = [];
+        if (pagesField) {
+          try {
+            const payload = JSON.parse(pagesField) as MangaHubPagesPayload;
+            const prefix = payload.p ?? "";
+            for (const img of payload.i ?? []) pages.push(`${IMAGE_CDN}/${prefix}${img}`);
+          } catch {
+            /* not valid JSON */
+          }
+        }
+
+        return { id: chapter.chapterId, mangaId: chapter.sourceManga.mangaId, pages };
+      } catch (err) {
+        const isRateLimit = /rate.?limit|api.?key/i.test(
+          err instanceof Error ? err.message : String(err),
+        );
+        if (!isRateLimit || attempt >= MAX_RETRIES) throw err;
+        // graphQL() already refreshed the token; short pause before retry
+        await new Promise<void>((resolve) => setTimeout(resolve, 1500));
       }
     }
 
-    return { id: chapter.chapterId, mangaId: chapter.sourceManga.mangaId, pages };
+    throw new Error("unreachable");
   }
 
   getMangaShareUrl(mangaId: string): string {
