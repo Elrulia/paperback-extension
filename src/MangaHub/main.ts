@@ -29,6 +29,7 @@ import type {
   SourceManga,
   TagSection,
 } from "@paperback/types";
+
 import type { MangaHubSearchMeta } from "./forms";
 import { MangaHubSearchForm } from "./forms";
 import { getBaseUrlOverride, getUseGenericTitle, MangaHubSettingsForm } from "./settings";
@@ -47,7 +48,6 @@ const THUMB_CDN = "https://thumb.mghcdn.com";
 const PER_PAGE = 30;
 const ACCESS_KEY_STATE = "mangahub.accessKey";
 
-
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -56,15 +56,31 @@ const USER_AGENTS = [
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
 ];
 
-interface GqlError { message?: string }
+interface GqlError {
+  message?: string;
+}
 interface MangaHubMangaDto {
   id?: number;
-  title?: string; slug?: string; status?: string; image?: string;
-  author?: string; artist?: string; genres?: string; description?: string;
-  alternativeTitle?: string; latestChapter?: number; chapters?: MangaHubChapterDto[];
+  title?: string;
+  slug?: string;
+  status?: string;
+  image?: string;
+  author?: string;
+  artist?: string;
+  genres?: string;
+  description?: string;
+  alternativeTitle?: string;
+  latestChapter?: number;
+  chapters?: MangaHubChapterDto[];
 }
-interface MangaHubChapterDto { number: number; title?: string; date?: string }
-interface MangaHubChapterPagesDto { pages?: string }
+interface MangaHubChapterDto {
+  number: number;
+  title?: string;
+  date?: string;
+}
+interface MangaHubChapterPagesDto {
+  pages?: string;
+}
 interface MangaHubGqlResponse {
   data?: {
     search?: { rows?: MangaHubMangaDto[] };
@@ -79,7 +95,10 @@ interface MangaHubGqlResponse {
   };
   errors?: GqlError[];
 }
-interface MangaHubPagesPayload { p: string; i: string[] }
+interface MangaHubPagesPayload {
+  p: string;
+  i: string[];
+}
 
 class MangaHubInterceptor extends PaperbackInterceptor {
   constructor(
@@ -206,7 +225,11 @@ export class MangaHubExtension implements MangaHubImplementation {
     // does not inject stale cookies into the request (mirrors Netsky 0.8).
     const savedCookies = [...this.cookieStorageInterceptor.cookies];
     for (const cookie of savedCookies) {
-      try { this.cookieStorageInterceptor.deleteCookie(cookie); } catch { /* no domain */ }
+      try {
+        this.cookieStorageInterceptor.deleteCookie(cookie);
+      } catch {
+        /* no domain */
+      }
     }
 
     const chapterPath = mangaSlug
@@ -217,7 +240,7 @@ export class MangaHubExtension implements MangaHubImplementation {
       url: chapterPath,
       method: "GET",
       headers: {
-        "cookie": "mhub_access=; Path=/",
+        cookie: "mhub_access=; Path=/",
         "x-mhub-access": "mhub_access=; Path=/",
       },
     });
@@ -225,21 +248,29 @@ export class MangaHubExtension implements MangaHubImplementation {
     // Restore non-mhub_access cookies (e.g. Cloudflare cookies) after refresh.
     for (const cookie of savedCookies) {
       if (cookie.name !== "mhub_access") {
-        try { this.cookieStorageInterceptor.setCookie(cookie); } catch { /* ignore */ }
+        try {
+          this.cookieStorageInterceptor.setCookie(cookie);
+        } catch {
+          /* ignore */
+        }
       }
     }
 
     // Try raw Set-Cookie header first (like Netsky 0.8), fall back to parsed cookies.
     let key = "";
-    const rawSetCookie = (response.headers as Record<string, string>)?.["set-cookie"]
-      ?? (response.headers as Record<string, string>)?.["Set-Cookie"]
-      ?? "";
+    const rawSetCookie =
+      (response.headers as Record<string, string>)?.["set-cookie"] ??
+      (response.headers as Record<string, string>)?.["Set-Cookie"] ??
+      "";
     const headerMatch = /mhub_access=([^;]+)/.exec(rawSetCookie);
     if (headerMatch?.[1]) {
       key = headerMatch[1];
     } else {
       for (const cookie of response.cookies ?? []) {
-        if (cookie.name === "mhub_access" && cookie.value) { key = cookie.value; break; }
+        if (cookie.name === "mhub_access" && cookie.value) {
+          key = cookie.value;
+          break;
+        }
       }
     }
 
@@ -267,7 +298,11 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   private gqlErrorText(result: MangaHubGqlResponse): string {
     if (result.errors && result.errors.length > 0) {
-      return result.errors.map((e) => e.message ?? "").join(" ").toLowerCase().trim();
+      return result.errors
+        .map((e) => e.message ?? "")
+        .join(" ")
+        .toLowerCase()
+        .trim();
     }
     return "";
   }
@@ -312,11 +347,11 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   async getDiscoverSections(): Promise<DiscoverSection[]> {
     return [
-      { id: "popular",        title: "Popular",         type: DiscoverSectionType.featured },
-      { id: "latest",         title: "Latest Updates",  type: DiscoverSectionType.simpleCarousel },
+      { id: "popular", title: "Popular", type: DiscoverSectionType.featured },
+      { id: "latest", title: "Latest Updates", type: DiscoverSectionType.simpleCarousel },
       { id: "popularUpdates", title: "Popular Updates", type: DiscoverSectionType.simpleCarousel },
-      { id: "newManga",       title: "New Manga",       type: DiscoverSectionType.simpleCarousel },
-      { id: "completed",      title: "Completed",       type: DiscoverSectionType.simpleCarousel },
+      { id: "newManga", title: "New Manga", type: DiscoverSectionType.simpleCarousel },
+      { id: "completed", title: "Completed", type: DiscoverSectionType.simpleCarousel },
     ];
   }
 
@@ -324,8 +359,10 @@ export class MangaHubExtension implements MangaHubImplementation {
     section: DiscoverSection,
     metadata: Metadata | undefined,
   ): Promise<PagedResults<DiscoverSectionItem>> {
-    const page = typeof (metadata as { page?: number } | undefined)?.page === "number"
-      ? (metadata as { page: number }).page : 1;
+    const page =
+      typeof (metadata as { page?: number } | undefined)?.page === "number"
+        ? (metadata as { page: number }).page
+        : 1;
 
     // Latest always uses search(mod:LATEST) for every page so offsets are consistent.
     // Seen IDs are accumulated in metadata so cross-page duplicates are also filtered.
@@ -334,7 +371,10 @@ export class MangaHubExtension implements MangaHubImplementation {
       const previousSeenIds = new Set<number>(meta?.seenIds ?? []);
       const rows = await this.runSearch("", "all", "LATEST", page);
       const items = this.toDiscoverItems(rows, "simpleCarouselItem", true, previousSeenIds);
-      const allSeenIds = [...previousSeenIds, ...rows.flatMap(r => r.id !== undefined ? [r.id] : [])];
+      const allSeenIds = [
+        ...previousSeenIds,
+        ...rows.flatMap((r) => (r.id !== undefined ? [r.id] : [])),
+      ];
       return {
         items,
         metadata: rows.length === PER_PAGE ? { page: page + 1, seenIds: allSeenIds } : undefined,
@@ -357,21 +397,34 @@ export class MangaHubExtension implements MangaHubImplementation {
       switch (section.id) {
         case "popularUpdates": {
           const rows = this.homeCache?.popularUpdates ?? [];
-          return { items: this.toDiscoverItems(rows, "simpleCarouselItem"), metadata: rows.length > 0 ? { page: 2 } : undefined };
+          return {
+            items: this.toDiscoverItems(rows, "simpleCarouselItem"),
+            metadata: rows.length > 0 ? { page: 2 } : undefined,
+          };
         }
         case "popular": {
           const rows = this.homeCache?.popular?.rows ?? [];
-          return { items: this.toDiscoverItems(rows, "featuredCarouselItem"), metadata: rows.length === PER_PAGE ? { page: 2 } : undefined };
+          return {
+            items: this.toDiscoverItems(rows, "featuredCarouselItem"),
+            metadata: rows.length === PER_PAGE ? { page: 2 } : undefined,
+          };
         }
         case "newManga": {
           const rows = this.homeCache?.newManga?.rows ?? [];
-          return { items: this.toDiscoverItems(rows, "simpleCarouselItem"), metadata: rows.length === PER_PAGE ? { page: 2 } : undefined };
+          return {
+            items: this.toDiscoverItems(rows, "simpleCarouselItem"),
+            metadata: rows.length === PER_PAGE ? { page: 2 } : undefined,
+          };
         }
         case "completed": {
           const rows = this.homeCache?.completed?.rows ?? [];
-          return { items: this.toDiscoverItems(rows, "simpleCarouselItem"), metadata: rows.length === PER_PAGE ? { page: 2 } : undefined };
+          return {
+            items: this.toDiscoverItems(rows, "simpleCarouselItem"),
+            metadata: rows.length === PER_PAGE ? { page: 2 } : undefined,
+          };
         }
-        default: return { items: [] };
+        default:
+          return { items: [] };
       }
     }
 
@@ -388,7 +441,10 @@ export class MangaHubExtension implements MangaHubImplementation {
 
     const rows = await this.runSearch("", "all", order, page);
     return {
-      items: this.toDiscoverItems(rows, section.id === "popular" ? "featuredCarouselItem" : "simpleCarouselItem"),
+      items: this.toDiscoverItems(
+        rows,
+        section.id === "popular" ? "featuredCarouselItem" : "simpleCarouselItem",
+      ),
       metadata: rows.length === PER_PAGE ? { page: page + 1 } : undefined,
     };
   }
@@ -413,7 +469,13 @@ export class MangaHubExtension implements MangaHubImplementation {
       }
       seenSlugs.add(slug);
       if (row.id !== undefined) seenIds.add(row.id);
-      items.push({ type, mangaId: this.toSafeId(slug), imageUrl, title: row.title ?? "", metadata: undefined });
+      items.push({
+        type,
+        mangaId: this.toSafeId(slug),
+        imageUrl,
+        title: row.title ?? "",
+        metadata: undefined,
+      });
     }
     return items;
   }
@@ -444,32 +506,47 @@ export class MangaHubExtension implements MangaHubImplementation {
   ): Promise<PagedResults<SearchResultItem>> {
     const titleQuery = (query.title || "").trim();
     const searchMeta = query.metadata as MangaHubSearchMeta | undefined;
-    const page = typeof (metadata as { page?: number } | undefined)?.page === "number"
-      ? (metadata as { page: number }).page : 1;
+    const page =
+      typeof (metadata as { page?: number } | undefined)?.page === "number"
+        ? (metadata as { page: number }).page
+        : 1;
 
     const order = sortingOption?.id || "POPULAR";
     const genre = searchMeta?.genre?.length ? searchMeta.genre.join(",") : "all";
 
     const rows = await this.runSearch(titleQuery, genre, order, page);
 
-    const seen = new Set<string>();
+    const seenSlugs = new Set<string>();
     const results: SearchResultItem[] = [];
     for (const row of rows) {
-      const signature = `${row.author ?? ""}|${row.latestChapter ?? ""}|${row.genres ?? ""}`;
-      if (seen.has(signature)) continue;
-      seen.add(signature);
       const slug = row.slug ?? "";
       const imageUrl = this.thumbUrl(row.image);
       if (!slug || !imageUrl) continue;
-      results.push({ mangaId: this.toSafeId(slug), imageUrl, title: row.title ?? "", subtitle: undefined, metadata: undefined });
+      if (seenSlugs.has(slug)) continue;
+      seenSlugs.add(slug);
+      results.push({
+        mangaId: this.toSafeId(slug),
+        imageUrl,
+        title: row.title ?? "",
+        subtitle: undefined,
+        metadata: undefined,
+      });
     }
 
     const hasNextPage = rows.length === PER_PAGE;
     const reachedPageLimit = page >= MangaHubExtension.MAX_SEARCH_PAGES;
-    return { items: results, metadata: hasNextPage && !reachedPageLimit ? { page: page + 1 } : undefined };
+    return {
+      items: results,
+      metadata: hasNextPage && !reachedPageLimit ? { page: page + 1 } : undefined,
+    };
   }
 
-  private async runSearch(queryText: string, genre: string, order: string, page: number): Promise<MangaHubMangaDto[]> {
+  private async runSearch(
+    queryText: string,
+    genre: string,
+    order: string,
+    page: number,
+  ): Promise<MangaHubMangaDto[]> {
     const offset = (page - 1) * PER_PAGE;
     const gql = `{
       search(x:${this.mangaSource},q:${JSON.stringify(queryText)},genre:${JSON.stringify(genre)},mod:${order},offset:${offset}) {
@@ -497,7 +574,10 @@ export class MangaHubExtension implements MangaHubImplementation {
     const secondaryTitles: string[] = [];
     if (manga.alternativeTitle?.trim()) secondaryTitles.push(manga.alternativeTitle.trim());
 
-    const genres = (manga.genres ?? "").split(",").map((g) => g.trim()).filter((g) => g.length > 0);
+    const genres = (manga.genres ?? "")
+      .split(",")
+      .map((g) => g.trim())
+      .filter((g) => g.length > 0);
     const tagGroups: TagSection[] = [];
     if (genres.length > 0) {
       tagGroups.push({
@@ -508,7 +588,8 @@ export class MangaHubExtension implements MangaHubImplementation {
     }
 
     let synopsis = manga.description ?? "";
-    if (manga.alternativeTitle?.trim()) synopsis = `${synopsis}\n\nAlternative Name: ${manga.alternativeTitle.trim()}`;
+    if (manga.alternativeTitle?.trim())
+      synopsis = `${synopsis}\n\nAlternative Name: ${manga.alternativeTitle.trim()}`;
 
     return {
       mangaId,
@@ -543,8 +624,11 @@ export class MangaHubExtension implements MangaHubImplementation {
     const useGeneric = getUseGenericTitle(this.sourceName);
 
     const list = [...(manga.chapters ?? [])].reverse();
+    const seenChapNums = new Set<number>();
     const chapters: Chapter[] = [];
     for (const ch of list) {
+      if (seenChapNums.has(ch.number)) continue;
+      seenChapNums.add(ch.number);
       const numberString = String(ch.number);
       const chapterId = this.toSafeId(`${slug}/chapter-${numberString}`);
       let title: string;
@@ -591,7 +675,9 @@ export class MangaHubExtension implements MangaHubImplementation {
         const payload = JSON.parse(pagesField) as MangaHubPagesPayload;
         const prefix = payload.p ?? "";
         for (const img of payload.i ?? []) pages.push(`${IMAGE_CDN}/${prefix}${img}`);
-      } catch { /* not valid JSON */ }
+      } catch {
+        /* not valid JSON */
+      }
     }
 
     return { id: chapter.chapterId, mangaId: chapter.sourceManga.mangaId, pages };
@@ -616,7 +702,11 @@ export class MangaHubExtension implements MangaHubImplementation {
   }
 
   private safeDecode(value: string): string {
-    try { return decodeURIComponent(value); } catch { return value; }
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
   }
 
   private toSafeId(slug: string): string {
@@ -636,9 +726,12 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   private parseStatus(status: string): string {
     switch (status.toLowerCase()) {
-      case "ongoing": return "Ongoing";
-      case "completed": return "Completed";
-      default: return "Unknown";
+      case "ongoing":
+        return "Ongoing";
+      case "completed":
+        return "Completed";
+      default:
+        return "Unknown";
     }
   }
 
