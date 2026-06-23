@@ -45,6 +45,7 @@ interface MangaHubConfig {
 const GRAPHQL_URLS = ["https://api.mghcdn.com/graphql"];
 const IMAGE_CDN = "https://imgx.mghcdn.com";
 const THUMB_CDN = "https://thumb.mghcdn.com";
+const NO_COVER = "https://placehold.co/160x240?text=No+Cover";
 const PER_PAGE = 30;
 const ACCESS_KEY_STATE = "mangahub.accessKey";
 
@@ -596,7 +597,7 @@ export class MangaHubExtension implements MangaHubImplementation {
       mangaInfo: {
         primaryTitle: manga.title ?? "",
         secondaryTitles,
-        thumbnailUrl: this.thumbUrl(manga.image),
+        thumbnailUrl: this.thumbUrl(manga.image) || NO_COVER,
         author: this.cleanField(manga.author),
         artist: this.cleanField(manga.artist),
         synopsis: synopsis.trim(),
