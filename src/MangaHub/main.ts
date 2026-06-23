@@ -528,7 +528,7 @@ export class MangaHubExtension implements MangaHubImplementation {
         mangaId: this.toSafeId(slug),
         imageUrl,
         title: row.title ?? "",
-        subtitle: undefined,
+        subtitle: row.alternativeTitle?.trim() || undefined,
         metadata: undefined,
       });
     }
@@ -549,8 +549,8 @@ export class MangaHubExtension implements MangaHubImplementation {
   ): Promise<MangaHubMangaDto[]> {
     const offset = (page - 1) * PER_PAGE;
     const gql = `{
-      search(x:${this.mangaSource},q:${JSON.stringify(queryText)},genre:${JSON.stringify(genre)},mod:${order},offset:${offset}) {
-        rows { id title author slug image genres latestChapter }
+      search(x:${this.mangaSource},q:${JSON.stringify(queryText)},genre:${JSON.stringify(genre)},mod:${order},count:true,offset:${offset}) {
+        rows { id title alternativeTitle author slug image genres latestChapter }
       }
     }`;
     const result = await this.graphQL(gql);
