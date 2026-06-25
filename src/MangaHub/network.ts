@@ -1,31 +1,26 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later */
+import { CloudflareError, PaperbackInterceptor } from "@paperback/types";
+import type { Request as PaperbackRequest, Response as PaperbackResponse } from "@paperback/types";
 
-import {
-  CloudflareError,
-  PaperbackInterceptor,
-  type Request,
-  type Response,
-} from "@paperback/types";
+export const GRAPHQL_URL = "https://api.mghcdn.com/graphql";
 
-export const MANGAHUB_DOMAIN = "https://mangahub.io";
-export const API_DOMAIN = "https://api.mghcdn.com";
-export const GRAPHQL_URL = `${API_DOMAIN}/graphql`;
-
-export class MainInterceptor extends PaperbackInterceptor {
+export class MangaHubInterceptor extends PaperbackInterceptor {
   constructor(
     id: string,
+    private readonly getBaseUrl: () => string,
     private readonly getAccessKey: () => string,
     private readonly getUserAgent: () => string,
   ) {
     super(id);
   }
 
-  override async interceptRequest(request: Request): Promise<Request> {
-    const ua = this.getUserAgent() || (await Application.getDefaultUserAgent());
+  override async interceptRequest(request: PaperbackRequest): Promise<PaperbackRequest> {
+    const baseUrl = this.getBaseUrl();
+    const overrideUA = this.getUserAgent();
     const headers: Record<string, string> = {
-      ...request.headers,
-      "user-agent": ua,
-      referer: `${MANGAHUB_DOMAIN}/`,
+      ...(request.headers as Record<string, string>),
+      referer: `${baseUrl}/`,
+      origin: baseUrl,
+      "user-agent": overrideUA || (await Application.getDefaultUserAgent()),
       "accept-language": "en-US,en;q=0.5",
     };
 
@@ -38,16 +33,15 @@ export class MainInterceptor extends PaperbackInterceptor {
       headers["accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
     }
 
-    request.headers = headers;
-    return request;
+    return { ...request, headers };
   }
 
   override async interceptResponse(
-    request: Request,
-    response: Response,
+    request: PaperbackRequest,
+    response: PaperbackResponse,
     data: ArrayBuffer,
   ): Promise<ArrayBuffer> {
-    if (response.headers?.["cf-mitigated"] === "challenge") {
+    if ((response.headers as Record<string, string>)?.["cf-mitigated"] === "challenge") {
       throw new CloudflareError({
         url: request.url,
         method: request.method ?? "GET",

@@ -1,11 +1,9 @@
-﻿import {
+import {
   BasicRateLimiter,
-  CloudflareError,
   ContentRating,
   CookieStorageInterceptor,
   DiscoverSectionType,
   type Form,
-  PaperbackInterceptor,
 } from "@paperback/types";
 import type {
   Chapter,
@@ -21,7 +19,6 @@ import type {
   Metadata,
   PagedResults,
   Request as PaperbackRequest,
-  Response as PaperbackResponse,
   SearchQuery,
   SearchResultItem,
   SearchResultsProviding,
@@ -30,19 +27,15 @@ import type {
   TagSection,
 } from "@paperback/types";
 
-import type { MangaHubSearchMeta } from "./forms";
-import { MangaHubSearchForm } from "./forms";
+import { GRAPHQL_URL, MangaHubInterceptor } from "./network";
+import type { MangaHubSearchMeta } from "./search";
+import { MangaHubSearchForm } from "./search";
 import { getBaseUrlOverride, getUseGenericTitle, MangaHubSettingsForm } from "./settings";
 
-interface MangaHubConfig {
-  name: string;
-  baseUrl: string;
-  mangaSource: string;
-  contentRating?: ContentRating;
-  langCode?: string;
-}
+// ----------------------------------------------------------------
+// Constants
+// ----------------------------------------------------------------
 
-const GRAPHQL_URLS = ["https://api.mghcdn.com/graphql"];
 const IMAGE_CDN = "https://imgx.mghcdn.com";
 const THUMB_CDN = "https://thumb.mghcdn.com";
 const NO_COVER = "https://placehold.co/160x240?text=No+Cover";
@@ -57,9 +50,14 @@ const USER_AGENTS = [
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
 ];
 
+// ----------------------------------------------------------------
+// API response types
+// ----------------------------------------------------------------
+
 interface GqlError {
   message?: string;
 }
+
 interface MangaHubMangaDto {
   id?: number;
   title?: string;
@@ -74,20 +72,22 @@ interface MangaHubMangaDto {
   latestChapter?: number;
   chapters?: MangaHubChapterDto[];
 }
+
 interface MangaHubChapterDto {
   number: number;
   title?: string;
   date?: string;
 }
+
 interface MangaHubChapterPagesDto {
   pages?: string;
 }
+
 interface MangaHubGqlResponse {
   data?: {
     search?: { rows?: MangaHubMangaDto[] };
     manga?: MangaHubMangaDto;
     chapter?: MangaHubChapterPagesDto;
-    // Home batch query aliases
     popularUpdates?: MangaHubMangaDto[];
     latest?: MangaHubMangaDto[];
     popular?: { rows?: MangaHubMangaDto[] };
@@ -96,58 +96,22 @@ interface MangaHubGqlResponse {
   };
   errors?: GqlError[];
 }
+
 interface MangaHubPagesPayload {
   p: string;
   i: string[];
 }
 
-class MangaHubInterceptor extends PaperbackInterceptor {
-  constructor(
-    id: string,
-    private readonly getBaseUrl: () => string,
-    private readonly getAccessKey: () => string,
-    private readonly getUserAgent: () => string,
-  ) {
-    super(id);
-  }
+// ----------------------------------------------------------------
+// Extension
+// ----------------------------------------------------------------
 
-  override async interceptRequest(request: PaperbackRequest): Promise<PaperbackRequest> {
-    const baseUrl = this.getBaseUrl();
-    const overrideUA = this.getUserAgent();
-    const headers: Record<string, string> = {
-      ...(request.headers as Record<string, string>),
-      referer: `${baseUrl}/`,
-      origin: baseUrl,
-      "user-agent": overrideUA || (await Application.getDefaultUserAgent()),
-      "accept-language": "en-US,en;q=0.5",
-    };
-
-    if (GRAPHQL_URLS.some((u) => request.url.startsWith(u))) {
-      headers["content-type"] = "application/json";
-      headers["accept"] = "application/json";
-      const key = this.getAccessKey();
-      if (key) headers["x-mhub-access"] = key;
-    } else {
-      headers["accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
-    }
-
-    return { ...request, headers };
-  }
-
-  override async interceptResponse(
-    request: PaperbackRequest,
-    response: PaperbackResponse,
-    data: ArrayBuffer,
-  ): Promise<ArrayBuffer> {
-    if ((response.headers as Record<string, string>)?.["cf-mitigated"] === "challenge") {
-      throw new CloudflareError({
-        url: request.url,
-        method: request.method ?? "GET",
-        headers: { "user-agent": await Application.getDefaultUserAgent() },
-      });
-    }
-    return data;
-  }
+interface MangaHubConfig {
+  name: string;
+  baseUrl: string;
+  mangaSource: string;
+  contentRating?: ContentRating;
+  langCode?: string;
 }
 
 type MangaHubImplementation = Extension &
@@ -169,15 +133,10 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   private accessKey = "";
   private currentUserAgent = "";
-  private endpointIndex = 0;
   private homeCache: MangaHubGqlResponse["data"] | null = null;
 
   get baseUrl(): string {
     return getBaseUrlOverride(this.sourceName) ?? this.defaultBaseUrl;
-  }
-
-  private get graphqlUrl(): string {
-    return GRAPHQL_URLS[this.endpointIndex] ?? GRAPHQL_URLS[0]!;
   }
 
   requestManager: MangaHubInterceptor;
@@ -310,7 +269,7 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   private async postGraphQL(query: string): Promise<MangaHubGqlResponse> {
     const [response, data] = await Application.scheduleRequest({
-      url: this.graphqlUrl,
+      url: GRAPHQL_URL,
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ query }),
@@ -386,10 +345,10 @@ export class MangaHubExtension implements MangaHubImplementation {
     if (page === 1) {
       if (!this.homeCache) {
         const gql = `{
-          popularUpdates: latestPopular(x:${this.mangaSource}) { id title slug image latestChapter }
-          popular: search(x:${this.mangaSource},mod:POPULAR,limit:30) { rows { id title slug image latestChapter } }
-          newManga: search(x:${this.mangaSource},mod:NEW,limit:30) { rows { id title slug image latestChapter } }
-          completed: search(x:${this.mangaSource},mod:COMPLETED,limit:30) { rows { id title slug image latestChapter } }
+          popularUpdates: latestPopular(x:${this.mangaSource}) { id title slug image }
+          popular: search(x:${this.mangaSource},mod:POPULAR,limit:30) { rows { id title slug image } }
+          newManga: search(x:${this.mangaSource},mod:NEW,limit:30) { rows { id title slug image } }
+          completed: search(x:${this.mangaSource},mod:COMPLETED,limit:30) { rows { id title slug image } }
         }`;
         const result = await this.graphQL(gql);
         this.homeCache = result.data ?? null;
@@ -453,7 +412,7 @@ export class MangaHubExtension implements MangaHubImplementation {
   private toDiscoverItems(
     rows: MangaHubMangaDto[],
     type: "featuredCarouselItem" | "simpleCarouselItem",
-    dedupSlugs = false,
+    dedup = false,
     previousSeenIds: ReadonlySet<number> = new Set(),
   ): DiscoverSectionItem[] {
     const seenSlugs = new Set<string>();
@@ -464,7 +423,7 @@ export class MangaHubExtension implements MangaHubImplementation {
       if (!slug) continue;
       const imageUrl = this.thumbUrl(row.image);
       if (!imageUrl) continue;
-      if (dedupSlugs) {
+      if (dedup) {
         if (seenSlugs.has(slug)) continue;
         if (row.id !== undefined && seenIds.has(row.id)) continue;
       }
@@ -551,7 +510,7 @@ export class MangaHubExtension implements MangaHubImplementation {
     const offset = (page - 1) * PER_PAGE;
     const gql = `{
       search(x:${this.mangaSource},q:${JSON.stringify(queryText)},genre:${JSON.stringify(genre)},mod:${order},count:true,offset:${offset}) {
-        rows { id title author slug image genres latestChapter }
+        rows { id title slug image }
       }
     }`;
     const result = await this.graphQL(gql);
@@ -623,7 +582,7 @@ export class MangaHubExtension implements MangaHubImplementation {
     const slug = this.slugFromId(sourceManga.mangaId);
     const gql = `{
       manga(x:${this.mangaSource},slug:${JSON.stringify(slug)}) {
-        slug chapters { number title date }
+        chapters { number title date }
       }
     }`;
     const result = await this.graphQL(gql, slug);
@@ -667,7 +626,7 @@ export class MangaHubExtension implements MangaHubImplementation {
 
     const gql = `{
       chapter(x:${this.mangaSource},slug:${JSON.stringify(slug)},number:${number}) {
-        pages mangaID number manga { slug }
+        pages
       }
     }`;
 
@@ -676,18 +635,7 @@ export class MangaHubExtension implements MangaHubImplementation {
       try {
         const result = await this.graphQL(gql, slug);
         const pagesField = result.data?.chapter?.pages;
-
-        const pages: string[] = [];
-        if (pagesField) {
-          try {
-            const payload = JSON.parse(pagesField) as MangaHubPagesPayload;
-            const prefix = payload.p ?? "";
-            for (const img of payload.i ?? []) pages.push(`${IMAGE_CDN}/${prefix}${img}`);
-          } catch {
-            /* not valid JSON */
-          }
-        }
-
+        const pages = pagesField ? this.parsePageUrls(pagesField) : [];
         return { id: chapter.chapterId, mangaId: chapter.sourceManga.mangaId, pages };
       } catch (err) {
         const isRateLimit = /rate.?limit|api.?key/i.test(
@@ -717,15 +665,21 @@ export class MangaHubExtension implements MangaHubImplementation {
     return `${THUMB_CDN}/${image}`;
   }
 
-  private slugFromId(mangaId: string): string {
-    return this.safeDecode(mangaId);
+  private parsePageUrls(pagesJson: string): string[] {
+    try {
+      const payload = JSON.parse(pagesJson) as MangaHubPagesPayload;
+      const prefix = payload.p ?? "";
+      return (payload.i ?? []).map((img) => `${IMAGE_CDN}/${prefix}${img}`);
+    } catch {
+      return [];
+    }
   }
 
-  private safeDecode(value: string): string {
+  private slugFromId(mangaId: string): string {
     try {
-      return decodeURIComponent(value);
+      return decodeURIComponent(mangaId);
     } catch {
-      return value;
+      return mangaId;
     }
   }
 
