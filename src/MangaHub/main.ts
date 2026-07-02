@@ -494,7 +494,8 @@ export class MangaHubExtension implements MangaHubImplementation {
     }
 
     const hasNextPage = rows.length === PER_PAGE;
-    const reachedPageLimit = page >= MangaHubExtension.MAX_SEARCH_PAGES;
+    // Only cap pagination for text searches; genre browsing can scroll indefinitely.
+    const reachedPageLimit = titleQuery.length > 0 && page >= MangaHubExtension.MAX_SEARCH_PAGES;
     return {
       items: results,
       metadata: hasNextPage && !reachedPageLimit ? { page: page + 1 } : undefined,
