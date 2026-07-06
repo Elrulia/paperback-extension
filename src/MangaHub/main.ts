@@ -27,7 +27,12 @@ import type {
   TagSection,
 } from "@paperback/types";
 
-import { GRAPHQL_URL, MangaHubInterceptor } from "./network";
+import {
+  GRAPHQL_URL,
+  MangaHubInterceptor,
+  scheduleRequestSafely,
+  SOURCE_UNREACHABLE_MESSAGE,
+} from "./network";
 import type { MangaHubSearchMeta } from "./search";
 import { MangaHubSearchForm } from "./search";
 import { getBaseUrlOverride, getUseGenericTitle, MangaHubSettingsForm } from "./settings";
@@ -196,7 +201,7 @@ export class MangaHubExtension implements MangaHubImplementation {
       ? `${this.baseUrl}/chapter/${mangaSlug}/chapter-1?reloadKey=1`
       : `${this.baseUrl}/chapter/the-last-human/chapter-1?reloadKey=1`;
 
-    const [response] = await Application.scheduleRequest({
+    const [response] = await scheduleRequestSafely({
       url: chapterPath,
       method: "GET",
       headers: {
@@ -268,18 +273,23 @@ export class MangaHubExtension implements MangaHubImplementation {
   }
 
   private async postGraphQL(query: string): Promise<MangaHubGqlResponse> {
-    const [response, data] = await Application.scheduleRequest({
+    const [response, data] = await scheduleRequestSafely({
       url: GRAPHQL_URL,
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ query }),
     });
     if (response.status === 404) throw new Error("Content not found");
+    // Cloudflare stays up and returns a normal (non-rejecting) 5xx response
+    // with an HTML error page when the MangaHub origin itself is down.
+    if (response.status >= 500) throw new Error(SOURCE_UNREACHABLE_MESSAGE);
     const jsonStr = Application.arrayBufferToUTF8String(data);
     try {
       return JSON.parse(jsonStr) as MangaHubGqlResponse;
     } catch {
-      return {};
+      // Any other non-JSON body (unexpected error page, truncated response, etc.)
+      // must not be treated as a silent empty success.
+      throw new Error(SOURCE_UNREACHABLE_MESSAGE);
     }
   }
 

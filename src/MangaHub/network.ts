@@ -3,6 +3,26 @@ import type { Request as PaperbackRequest, Response as PaperbackResponse } from 
 
 export const GRAPHQL_URL = "https://api.mghcdn.com/graphql";
 
+export const SOURCE_UNREACHABLE_MESSAGE =
+  "MangaHub is unreachable right now. The site may be down or blocking requests — please try again later.";
+
+/**
+ * Application.scheduleRequest only rejects for connection-level failures
+ * (DNS, timeout, refused). When Cloudflare is up but the origin is down, the
+ * request still resolves normally with a 5xx status and an HTML error body
+ * instead of JSON, so callers must also check the response themselves.
+ */
+export async function scheduleRequestSafely(
+  request: PaperbackRequest,
+): Promise<[PaperbackResponse, ArrayBuffer]> {
+  try {
+    return await Application.scheduleRequest(request);
+  } catch (err) {
+    if (err instanceof CloudflareError) throw err;
+    throw new Error(SOURCE_UNREACHABLE_MESSAGE);
+  }
+}
+
 export class MangaHubInterceptor extends PaperbackInterceptor {
   constructor(
     id: string,
