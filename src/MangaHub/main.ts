@@ -329,25 +329,19 @@ export class MangaHubExtension implements MangaHubImplementation {
     section: DiscoverSection,
     metadata: Metadata | undefined,
   ): Promise<PagedResults<DiscoverSectionItem>> {
-    const page =
-      typeof (metadata as { page?: number } | undefined)?.page === "number"
-        ? (metadata as { page: number }).page
-        : 1;
+    const meta = metadata as { page?: number; seenIds?: number[] } | undefined;
+    const page = typeof meta?.page === "number" ? meta.page : 1;
+    const previousSeenIds = new Set<number>(meta?.seenIds ?? []);
 
     // Latest always uses search(mod:LATEST) for every page so offsets are consistent.
-    // Seen IDs are accumulated in metadata so cross-page duplicates are also filtered.
+    // A manga can be indexed under several alias titles sharing one id, and the
+    // underlying order can also shift between fetches — seenIds catches both.
     if (section.id === "latest") {
-      const meta = metadata as { page?: number; seenIds?: number[] } | undefined;
-      const previousSeenIds = new Set<number>(meta?.seenIds ?? []);
       const rows = await this.runSearch("", "all", "LATEST", page);
-      const items = this.toDiscoverItems(rows, "simpleCarouselItem", true, previousSeenIds);
-      const allSeenIds = [
-        ...previousSeenIds,
-        ...rows.flatMap((r) => (r.id !== undefined ? [r.id] : [])),
-      ];
+      const { items, seenIds } = this.toDiscoverItems(rows, "simpleCarouselItem", previousSeenIds);
       return {
         items,
-        metadata: rows.length === PER_PAGE ? { page: page + 1, seenIds: allSeenIds } : undefined,
+        metadata: rows.length === PER_PAGE ? { page: page + 1, seenIds: [...seenIds] } : undefined,
       };
     }
 
@@ -367,30 +361,34 @@ export class MangaHubExtension implements MangaHubImplementation {
       switch (section.id) {
         case "popularUpdates": {
           const rows = this.homeCache?.popularUpdates ?? [];
+          const { items, seenIds } = this.toDiscoverItems(rows, "simpleCarouselItem");
           return {
-            items: this.toDiscoverItems(rows, "simpleCarouselItem"),
-            metadata: rows.length > 0 ? { page: 2 } : undefined,
+            items,
+            metadata: rows.length > 0 ? { page: 2, seenIds: [...seenIds] } : undefined,
           };
         }
         case "popular": {
           const rows = this.homeCache?.popular?.rows ?? [];
+          const { items, seenIds } = this.toDiscoverItems(rows, "featuredCarouselItem");
           return {
-            items: this.toDiscoverItems(rows, "featuredCarouselItem"),
-            metadata: rows.length === PER_PAGE ? { page: 2 } : undefined,
+            items,
+            metadata: rows.length === PER_PAGE ? { page: 2, seenIds: [...seenIds] } : undefined,
           };
         }
         case "newManga": {
           const rows = this.homeCache?.newManga?.rows ?? [];
+          const { items, seenIds } = this.toDiscoverItems(rows, "simpleCarouselItem");
           return {
-            items: this.toDiscoverItems(rows, "simpleCarouselItem"),
-            metadata: rows.length === PER_PAGE ? { page: 2 } : undefined,
+            items,
+            metadata: rows.length === PER_PAGE ? { page: 2, seenIds: [...seenIds] } : undefined,
           };
         }
         case "completed": {
           const rows = this.homeCache?.completed?.rows ?? [];
+          const { items, seenIds } = this.toDiscoverItems(rows, "simpleCarouselItem");
           return {
-            items: this.toDiscoverItems(rows, "simpleCarouselItem"),
-            metadata: rows.length === PER_PAGE ? { page: 2 } : undefined,
+            items,
+            metadata: rows.length === PER_PAGE ? { page: 2, seenIds: [...seenIds] } : undefined,
           };
         }
         default:
@@ -410,21 +408,22 @@ export class MangaHubExtension implements MangaHubImplementation {
     if (!order) return { items: [] };
 
     const rows = await this.runSearch("", "all", order, page);
+    const { items, seenIds } = this.toDiscoverItems(
+      rows,
+      section.id === "popular" ? "featuredCarouselItem" : "simpleCarouselItem",
+      previousSeenIds,
+    );
     return {
-      items: this.toDiscoverItems(
-        rows,
-        section.id === "popular" ? "featuredCarouselItem" : "simpleCarouselItem",
-      ),
-      metadata: rows.length === PER_PAGE ? { page: page + 1 } : undefined,
+      items,
+      metadata: rows.length === PER_PAGE ? { page: page + 1, seenIds: [...seenIds] } : undefined,
     };
   }
 
   private toDiscoverItems(
     rows: MangaHubMangaDto[],
     type: "featuredCarouselItem" | "simpleCarouselItem",
-    dedup = false,
     previousSeenIds: ReadonlySet<number> = new Set(),
-  ): DiscoverSectionItem[] {
+  ): { items: DiscoverSectionItem[]; seenIds: Set<number> } {
     const seenSlugs = new Set<string>();
     const seenIds = new Set<number>(previousSeenIds);
     const items: DiscoverSectionItem[] = [];
@@ -433,10 +432,8 @@ export class MangaHubExtension implements MangaHubImplementation {
       if (!slug) continue;
       const imageUrl = this.thumbUrl(row.image);
       if (!imageUrl) continue;
-      if (dedup) {
-        if (seenSlugs.has(slug)) continue;
-        if (row.id !== undefined && seenIds.has(row.id)) continue;
-      }
+      if (seenSlugs.has(slug)) continue;
+      if (row.id !== undefined && seenIds.has(row.id)) continue;
       seenSlugs.add(slug);
       if (row.id !== undefined) seenIds.add(row.id);
       items.push({
@@ -447,7 +444,7 @@ export class MangaHubExtension implements MangaHubImplementation {
         metadata: undefined,
       });
     }
-    return items;
+    return { items, seenIds };
   }
 
   // ----------------------------------------------------------------
@@ -476,24 +473,30 @@ export class MangaHubExtension implements MangaHubImplementation {
   ): Promise<PagedResults<SearchResultItem>> {
     const titleQuery = (query.title || "").trim();
     const searchMeta = query.metadata as MangaHubSearchMeta | undefined;
-    const page =
-      typeof (metadata as { page?: number } | undefined)?.page === "number"
-        ? (metadata as { page: number }).page
-        : 1;
+    const meta = metadata as { page?: number; seenIds?: number[] } | undefined;
+    const page = typeof meta?.page === "number" ? meta.page : 1;
+    const previousSeenIds = new Set<number>(meta?.seenIds ?? []);
 
     const order = sortingOption?.id || "POPULAR";
     const genre = searchMeta?.genre?.length ? searchMeta.genre.join(",") : "all";
 
     const rows = await this.runSearch(titleQuery, genre, order, page);
 
+    // A manga can be indexed under several alias titles sharing one id, and
+    // offset-based pagination against a reshuffling order (e.g. LATEST bumps a
+    // manga on every new chapter) can also hand back a manga already seen on an
+    // earlier page. seenIds catches both, mirroring the discover section above.
     const seenSlugs = new Set<string>();
+    const seenIds = new Set<number>(previousSeenIds);
     const results: SearchResultItem[] = [];
     for (const row of rows) {
       const slug = row.slug ?? "";
       if (!slug) continue;
-      const imageUrl = this.thumbUrl(row.image);
       if (seenSlugs.has(slug)) continue;
+      if (row.id !== undefined && seenIds.has(row.id)) continue;
+      const imageUrl = this.thumbUrl(row.image);
       seenSlugs.add(slug);
+      if (row.id !== undefined) seenIds.add(row.id);
       results.push({
         mangaId: this.toSafeId(slug),
         imageUrl,
@@ -508,7 +511,8 @@ export class MangaHubExtension implements MangaHubImplementation {
     const reachedPageLimit = titleQuery.length > 0 && page >= MangaHubExtension.MAX_SEARCH_PAGES;
     return {
       items: results,
-      metadata: hasNextPage && !reachedPageLimit ? { page: page + 1 } : undefined,
+      metadata:
+        hasNextPage && !reachedPageLimit ? { page: page + 1, seenIds: [...seenIds] } : undefined,
     };
   }
 
