@@ -556,9 +556,11 @@ export class MangaHubExtension implements MangaHubImplementation {
    * title variants of the same series), but sometimes indexes a duplicate as a
    * fully separate listing with its own id instead — alternativeTitle points
    * at it either way. So a listing found by searching for an alternate title
-   * is trusted if it shares this manga's id *or* its own title matches the
-   * alternate title we searched for (MangaHub lists these as pointing at each
-   * other, confirming they're the same series even with different ids).
+   * is trusted if it shares this manga's id *or* its own title overlaps with
+   * the alternate title we searched for (MangaHub lists these as pointing at
+   * each other, confirming they're the same series even with different ids).
+   * A substring check (not exact equality) because a searched title can itself
+   * be a comma-punctuated fragment of the row's real title.
    */
   private async resolveMissingCover(
     slug: string,
@@ -571,11 +573,16 @@ export class MangaHubExtension implements MangaHubImplementation {
 
     for (const altTitle of alternateTitles) {
       const rows = await this.runSearch(altTitle, "all", "POPULAR", 1);
-      const match = rows.find(
-        (r) =>
-          r.image &&
-          (r.id === mangaHubId || this.normalizeTitle(r.title) === this.normalizeTitle(altTitle)),
-      );
+      const normalizedAltTitle = this.normalizeTitle(altTitle);
+      const match = rows.find((r) => {
+        if (!r.image) return false;
+        if (r.id === mangaHubId) return true;
+        const normalizedRowTitle = this.normalizeTitle(r.title);
+        return (
+          normalizedRowTitle.includes(normalizedAltTitle) ||
+          normalizedAltTitle.includes(normalizedRowTitle)
+        );
+      });
       if (match) {
         const url = this.thumbUrl(match.image);
         cacheCoverUrl(slug, url);
@@ -636,13 +643,7 @@ export class MangaHubExtension implements MangaHubImplementation {
     if (thumbnailUrl) {
       clearCachedCoverUrl(slug);
     } else {
-      // MangaHub isn't consistent about the separator — some listings use ";",
-      // others ",". Splitting on either catches both without needing to know
-      // which one a given manga's alternativeTitle field happens to use.
-      const alternateTitles = (manga.alternativeTitle ?? "")
-        .split(/[;,]/)
-        .map((t) => t.trim())
-        .filter((t) => t.length > 0);
+      const alternateTitles = this.parseAlternateTitles(manga.alternativeTitle ?? "");
       const titleCandidates = [manga.title ?? "", ...alternateTitles].filter(
         (t, i, arr) => t.length > 0 && arr.indexOf(t) === i,
       );
@@ -773,6 +774,31 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   private normalizeTitle(title: string | undefined): string {
     return (title ?? "").toLowerCase().trim().replace(/\s+/g, " ");
+  }
+
+  /**
+   * MangaHub separates alternate titles with ";" in some listings and "," in
+   * others — and a title can itself legitimately contain a comma (e.g. "After
+   * Retiring, I Live..."). Splitting on "," alone would shred a correct title
+   * into meaningless fragments, so each ";"-delimited segment is kept whole
+   * *and* also split on "," — trying both means a correct comma-containing
+   * title is never lost, at the cost of a few extra (harmless) search misses
+   * for its fragments.
+   */
+  private parseAlternateTitles(rawAlternativeTitle: string): string[] {
+    const candidates: string[] = [];
+    for (const segment of rawAlternativeTitle.split(";")) {
+      const trimmedSegment = segment.trim();
+      if (!trimmedSegment) continue;
+      candidates.push(trimmedSegment);
+      if (trimmedSegment.includes(",")) {
+        for (const part of trimmedSegment.split(",")) {
+          const trimmedPart = part.trim();
+          if (trimmedPart) candidates.push(trimmedPart);
+        }
+      }
+    }
+    return [...new Set(candidates)];
   }
 
   private parsePageUrls(pagesJson: string): string[] {
