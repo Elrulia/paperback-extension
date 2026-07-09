@@ -585,7 +585,17 @@ export class MangaHubExtension implements MangaHubImplementation {
     if (thumbnailUrl) {
       clearCachedCoverUrl(slug);
     } else {
-      thumbnailUrl = (await resolveFallbackCoverUrl(slug, manga.title ?? "")) ?? "";
+      // AniList's title wording can diverge from MangaHub's primary title, so
+      // alternate titles (often the native/romaji originals) are tried too —
+      // resolveFallbackCoverUrl stops at the first one that finds a cover.
+      const alternateTitles = (manga.alternativeTitle ?? "")
+        .split(";")
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0);
+      const titleCandidates = [manga.title ?? "", ...alternateTitles].filter(
+        (t, i, arr) => t.length > 0 && arr.indexOf(t) === i,
+      );
+      thumbnailUrl = (await resolveFallbackCoverUrl(slug, titleCandidates)) ?? "";
       if (thumbnailUrl) synopsis = `${synopsis}\n\nNote: cover image sourced from AniList.`;
     }
 
