@@ -27,7 +27,12 @@ import type {
   TagSection,
 } from "@paperback/types";
 
-import { clearCachedCoverUrl, getCachedCoverUrl, resolveFallbackCoverUrl } from "./anilist";
+import {
+  cacheCoverUrl,
+  clearCachedCoverUrl,
+  getCachedCoverUrl,
+  resolveAniListCoverUrl,
+} from "./anilist";
 import {
   GRAPHQL_URL,
   MangaHubInterceptor,
@@ -499,7 +504,7 @@ export class MangaHubExtension implements MangaHubImplementation {
       if (row.id !== undefined && seenIds.has(row.id)) continue;
       const mangaHubImageUrl = this.thumbUrl(row.image);
       // Only reads a cover already resolved via getMangaDetails — list views
-      // never trigger an AniList lookup themselves.
+      // never trigger a lookup of their own.
       const fallbackCoverUrl = mangaHubImageUrl ? undefined : getCachedCoverUrl(slug);
       seenSlugs.add(slug);
       if (row.id !== undefined) seenIds.add(row.id);
@@ -507,7 +512,11 @@ export class MangaHubExtension implements MangaHubImplementation {
         mangaId: this.toSafeId(slug),
         imageUrl: mangaHubImageUrl || fallbackCoverUrl || "",
         title: row.title ?? "",
-        subtitle: fallbackCoverUrl ? "Cover via AniList" : undefined,
+        subtitle: fallbackCoverUrl
+          ? this.isMangaHubHostedUrl(fallbackCoverUrl)
+            ? "Alternate MangaHub cover"
+            : "Cover via AniList"
+          : undefined,
         metadata: undefined,
       });
     }
@@ -538,6 +547,38 @@ export class MangaHubExtension implements MangaHubImplementation {
     return result.data?.search?.rows ?? [];
   }
 
+  /**
+   * Resolves a stand-in cover for a manga MangaHub has no image for, in order:
+   * cache, then another MangaHub listing sharing the same id (an alternate
+   * title can have its own populated image), then AniList as a last resort.
+   * Whichever succeeds is cached permanently.
+   */
+  private async resolveMissingCover(
+    slug: string,
+    mangaHubId: number | undefined,
+    alternateTitles: string[],
+    titleCandidates: string[],
+  ): Promise<string> {
+    const cached = getCachedCoverUrl(slug);
+    if (cached) return cached;
+
+    if (mangaHubId !== undefined) {
+      for (const altTitle of alternateTitles) {
+        const rows = await this.runSearch(altTitle, "all", "POPULAR", 1);
+        const match = rows.find((r) => r.id === mangaHubId && r.image);
+        if (match) {
+          const url = this.thumbUrl(match.image);
+          cacheCoverUrl(slug, url);
+          return url;
+        }
+      }
+    }
+
+    const aniListUrl = await resolveAniListCoverUrl(titleCandidates);
+    if (aniListUrl) cacheCoverUrl(slug, aniListUrl);
+    return aniListUrl ?? "";
+  }
+
   // ----------------------------------------------------------------
   // Manga details
   // ----------------------------------------------------------------
@@ -546,7 +587,7 @@ export class MangaHubExtension implements MangaHubImplementation {
     const slug = this.slugFromId(mangaId);
     const gql = `{
       manga(x:${this.mangaSource},slug:${JSON.stringify(slug)}) {
-        title slug status image author artist genres description alternativeTitle
+        id title slug status image author artist genres description alternativeTitle
       }
     }`;
     const result = await this.graphQL(gql, slug);
@@ -579,15 +620,13 @@ export class MangaHubExtension implements MangaHubImplementation {
       synopsis = `${synopsis}\n\nAlternative Name: ${manga.alternativeTitle.trim()}`;
 
     // MangaHub has no cover for some manga. Re-checked on every details fetch:
-    // if MangaHub now has one, prefer it and drop any stale AniList fallback;
-    // otherwise resolve (and permanently cache) a stand-in cover from AniList.
+    // if MangaHub now has one, prefer it and drop any stale fallback; otherwise
+    // resolve (and permanently cache) a stand-in cover — preferring another
+    // MangaHub listing for the same id over an AniList lookup.
     let thumbnailUrl = this.thumbUrl(manga.image);
     if (thumbnailUrl) {
       clearCachedCoverUrl(slug);
     } else {
-      // AniList's title wording can diverge from MangaHub's primary title, so
-      // alternate titles (often the native/romaji originals) are tried too —
-      // resolveFallbackCoverUrl stops at the first one that finds a cover.
       const alternateTitles = (manga.alternativeTitle ?? "")
         .split(";")
         .map((t) => t.trim())
@@ -595,8 +634,17 @@ export class MangaHubExtension implements MangaHubImplementation {
       const titleCandidates = [manga.title ?? "", ...alternateTitles].filter(
         (t, i, arr) => t.length > 0 && arr.indexOf(t) === i,
       );
-      thumbnailUrl = (await resolveFallbackCoverUrl(slug, titleCandidates)) ?? "";
-      if (thumbnailUrl) synopsis = `${synopsis}\n\nNote: cover image sourced from AniList.`;
+      thumbnailUrl = await this.resolveMissingCover(
+        slug,
+        manga.id,
+        alternateTitles,
+        titleCandidates,
+      );
+      if (thumbnailUrl) {
+        synopsis = this.isMangaHubHostedUrl(thumbnailUrl)
+          ? `${synopsis}\n\nNote: cover found via another MangaHub listing for this manga.`
+          : `${synopsis}\n\nNote: cover found via AniList.`;
+      }
     }
 
     return {
@@ -705,6 +753,10 @@ export class MangaHubExtension implements MangaHubImplementation {
     if (!image) return "";
     if (/^https?:\/\//.test(image)) return image;
     return `${THUMB_CDN}/${image}`;
+  }
+
+  private isMangaHubHostedUrl(url: string): boolean {
+    return url.startsWith(THUMB_CDN) || url.startsWith(IMAGE_CDN);
   }
 
   private parsePageUrls(pagesJson: string): string[] {
