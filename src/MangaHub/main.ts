@@ -549,9 +549,16 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   /**
    * Resolves a stand-in cover for a manga MangaHub has no image for, in order:
-   * cache, then another MangaHub listing sharing the same id (an alternate
-   * title can have its own populated image), then AniList as a last resort.
-   * Whichever succeeds is cached permanently.
+   * cache, then another MangaHub listing for an alternate title, then AniList
+   * as a last resort. Whichever succeeds is cached permanently.
+   *
+   * MangaHub sometimes shares one numeric id across alias rows (e.g. multiple
+   * title variants of the same series), but sometimes indexes a duplicate as a
+   * fully separate listing with its own id instead — alternativeTitle points
+   * at it either way. So a listing found by searching for an alternate title
+   * is trusted if it shares this manga's id *or* its own title matches the
+   * alternate title we searched for (MangaHub lists these as pointing at each
+   * other, confirming they're the same series even with different ids).
    */
   private async resolveMissingCover(
     slug: string,
@@ -562,15 +569,17 @@ export class MangaHubExtension implements MangaHubImplementation {
     const cached = getCachedCoverUrl(slug);
     if (cached) return cached;
 
-    if (mangaHubId !== undefined) {
-      for (const altTitle of alternateTitles) {
-        const rows = await this.runSearch(altTitle, "all", "POPULAR", 1);
-        const match = rows.find((r) => r.id === mangaHubId && r.image);
-        if (match) {
-          const url = this.thumbUrl(match.image);
-          cacheCoverUrl(slug, url);
-          return url;
-        }
+    for (const altTitle of alternateTitles) {
+      const rows = await this.runSearch(altTitle, "all", "POPULAR", 1);
+      const match = rows.find(
+        (r) =>
+          r.image &&
+          (r.id === mangaHubId || this.normalizeTitle(r.title) === this.normalizeTitle(altTitle)),
+      );
+      if (match) {
+        const url = this.thumbUrl(match.image);
+        cacheCoverUrl(slug, url);
+        return url;
       }
     }
 
@@ -627,8 +636,11 @@ export class MangaHubExtension implements MangaHubImplementation {
     if (thumbnailUrl) {
       clearCachedCoverUrl(slug);
     } else {
+      // MangaHub isn't consistent about the separator — some listings use ";",
+      // others ",". Splitting on either catches both without needing to know
+      // which one a given manga's alternativeTitle field happens to use.
       const alternateTitles = (manga.alternativeTitle ?? "")
-        .split(";")
+        .split(/[;,]/)
         .map((t) => t.trim())
         .filter((t) => t.length > 0);
       const titleCandidates = [manga.title ?? "", ...alternateTitles].filter(
@@ -757,6 +769,10 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   private isMangaHubHostedUrl(url: string): boolean {
     return url.startsWith(THUMB_CDN) || url.startsWith(IMAGE_CDN);
+  }
+
+  private normalizeTitle(title: string | undefined): string {
+    return (title ?? "").toLowerCase().trim().replace(/\s+/g, " ");
   }
 
   private parsePageUrls(pagesJson: string): string[] {
