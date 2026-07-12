@@ -40,8 +40,15 @@ import {
   SOURCE_UNREACHABLE_MESSAGE,
 } from "./network";
 import type { MangaHubSearchMeta } from "./search";
-import { MangaHubSearchForm } from "./search";
-import { getBaseUrlOverride, getUseGenericTitle, MangaHubSettingsForm } from "./settings";
+import { GENRE_OPTIONS, MangaHubSearchForm } from "./search";
+import {
+  FILTERED_SECTION_ORDER_OPTIONS,
+  getBaseUrlOverride,
+  getExcludedGenres,
+  getFilteredSectionOrder,
+  getUseGenericTitle,
+  MangaHubSettingsForm,
+} from "./settings";
 
 // ----------------------------------------------------------------
 // Constants
@@ -325,10 +332,27 @@ export class MangaHubExtension implements MangaHubImplementation {
     return [
       { id: "popular", title: "Popular", type: DiscoverSectionType.featured },
       { id: "latest", title: "Latest Updates", type: DiscoverSectionType.simpleCarousel },
+      {
+        id: "filtered",
+        title: `${this.getFilteredOrderLabel()} (Filtered)`,
+        type: DiscoverSectionType.simpleCarousel,
+      },
       { id: "popularUpdates", title: "Popular Updates", type: DiscoverSectionType.simpleCarousel },
       { id: "newManga", title: "New Manga", type: DiscoverSectionType.simpleCarousel },
       { id: "completed", title: "Completed", type: DiscoverSectionType.simpleCarousel },
     ];
+  }
+
+  private async primeHomeCache(): Promise<void> {
+    if (this.homeCache) return;
+    const gql = `{
+      popularUpdates: latestPopular(x:${this.mangaSource}) { id title slug image genres }
+      popular: search(x:${this.mangaSource},mod:POPULAR,limit:30) { rows { id title slug image genres } }
+      newManga: search(x:${this.mangaSource},mod:NEW,limit:30) { rows { id title slug image genres } }
+      completed: search(x:${this.mangaSource},mod:COMPLETED,limit:30) { rows { id title slug image genres } }
+    }`;
+    const result = await this.graphQL(gql);
+    this.homeCache = result.data ?? null;
   }
 
   async getDiscoverSectionItems(
@@ -342,9 +366,37 @@ export class MangaHubExtension implements MangaHubImplementation {
     // Latest always uses search(mod:LATEST) for every page so offsets are consistent.
     // A manga can be indexed under several alias titles sharing one id, and the
     // underlying order can also shift between fetches — seenIds catches both.
-    if (section.id === "latest") {
-      const rows = await this.runSearch("", "all", "LATEST", page);
-      const { items, seenIds } = this.toDiscoverItems(rows, "simpleCarouselItem", previousSeenIds);
+    // Filtered works the same way but with a user-configurable order and with
+    // excluded genres (from settings) dropped from the results — except when
+    // that order is POPULAR, which (like Popular Updates) sources page 1 from
+    // latestPopular() instead, since that has no offset for later pages.
+    if (section.id === "latest" || section.id === "filtered") {
+      const order = section.id === "filtered" ? getFilteredSectionOrder(this.sourceName) : "LATEST";
+      const excludedGenreLabels =
+        section.id === "filtered" ? this.getExcludedGenreLabels() : new Set<string>();
+
+      if (order === "POPULAR" && page === 1) {
+        await this.primeHomeCache();
+        const rows = this.homeCache?.popularUpdates ?? [];
+        const { items, seenIds } = this.toDiscoverItems(
+          rows,
+          "simpleCarouselItem",
+          undefined,
+          excludedGenreLabels,
+        );
+        return {
+          items,
+          metadata: rows.length > 0 ? { page: 2, seenIds: [...seenIds] } : undefined,
+        };
+      }
+
+      const rows = await this.runSearch("", "all", order, page);
+      const { items, seenIds } = this.toDiscoverItems(
+        rows,
+        "simpleCarouselItem",
+        previousSeenIds,
+        excludedGenreLabels,
+      );
       return {
         items,
         metadata: rows.length === PER_PAGE ? { page: page + 1, seenIds: [...seenIds] } : undefined,
@@ -353,16 +405,7 @@ export class MangaHubExtension implements MangaHubImplementation {
 
     // Page 1: use the cached single batch query for all other sections.
     if (page === 1) {
-      if (!this.homeCache) {
-        const gql = `{
-          popularUpdates: latestPopular(x:${this.mangaSource}) { id title slug image }
-          popular: search(x:${this.mangaSource},mod:POPULAR,limit:30) { rows { id title slug image } }
-          newManga: search(x:${this.mangaSource},mod:NEW,limit:30) { rows { id title slug image } }
-          completed: search(x:${this.mangaSource},mod:COMPLETED,limit:30) { rows { id title slug image } }
-        }`;
-        const result = await this.graphQL(gql);
-        this.homeCache = result.data ?? null;
-      }
+      await this.primeHomeCache();
 
       switch (section.id) {
         case "popularUpdates": {
@@ -429,6 +472,7 @@ export class MangaHubExtension implements MangaHubImplementation {
     rows: MangaHubMangaDto[],
     type: "featuredCarouselItem" | "simpleCarouselItem",
     previousSeenIds: ReadonlySet<number> = new Set(),
+    excludedGenreLabels: ReadonlySet<string> = new Set(),
   ): { items: DiscoverSectionItem[]; seenIds: Set<number> } {
     const seenSlugs = new Set<string>();
     const seenIds = new Set<number>(previousSeenIds);
@@ -436,6 +480,7 @@ export class MangaHubExtension implements MangaHubImplementation {
     for (const row of rows) {
       const slug = row.slug ?? "";
       if (!slug) continue;
+      if (this.hasExcludedGenre(row.genres, excludedGenreLabels)) continue;
       // Only reads a cover already resolved via getMangaDetails — list views
       // never trigger an AniList lookup themselves.
       const imageUrl = this.thumbUrl(row.image) || getCachedCoverUrl(slug);
@@ -540,7 +585,7 @@ export class MangaHubExtension implements MangaHubImplementation {
     const offset = (page - 1) * PER_PAGE;
     const gql = `{
       search(x:${this.mangaSource},q:${JSON.stringify(queryText)},genre:${JSON.stringify(genre)},mod:${order},count:true,offset:${offset}) {
-        rows { id title slug image }
+        rows { id title slug image genres }
       }
     }`;
     const result = await this.graphQL(gql);
@@ -770,6 +815,29 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   private isMangaHubHostedUrl(url: string): boolean {
     return url.startsWith(THUMB_CDN) || url.startsWith(IMAGE_CDN);
+  }
+
+  private getExcludedGenreLabels(): Set<string> {
+    const excludedIds = new Set(getExcludedGenres(this.sourceName));
+    return new Set(
+      GENRE_OPTIONS.filter((opt) => excludedIds.has(opt.id)).map((opt) => opt.label.toLowerCase()),
+    );
+  }
+
+  private getFilteredOrderLabel(): string {
+    const order = getFilteredSectionOrder(this.sourceName);
+    return FILTERED_SECTION_ORDER_OPTIONS.find((opt) => opt.id === order)?.label ?? order;
+  }
+
+  private hasExcludedGenre(
+    rowGenres: string | undefined,
+    excludedGenreLabels: ReadonlySet<string>,
+  ): boolean {
+    if (!rowGenres || excludedGenreLabels.size === 0) return false;
+    return rowGenres
+      .split(",")
+      .map((g) => g.trim().toLowerCase())
+      .some((g) => excludedGenreLabels.has(g));
   }
 
   private normalizeTitle(title: string | undefined): string {
