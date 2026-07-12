@@ -345,8 +345,11 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   private async primeHomeCache(): Promise<void> {
     if (this.homeCache) return;
+    // latestPopular() returns a different type (LatestManga) that has no
+    // genres field — unlike search() rows, which do. Requesting it there
+    // breaks this entire combined query, not just that one sub-query.
     const gql = `{
-      popularUpdates: latestPopular(x:${this.mangaSource}) { id title slug image genres }
+      popularUpdates: latestPopular(x:${this.mangaSource}) { id title slug image }
       popular: search(x:${this.mangaSource},mod:POPULAR,limit:30) { rows { id title slug image genres } }
       newManga: search(x:${this.mangaSource},mod:NEW,limit:30) { rows { id title slug image genres } }
       completed: search(x:${this.mangaSource},mod:COMPLETED,limit:30) { rows { id title slug image genres } }
