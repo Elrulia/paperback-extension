@@ -1,7 +1,15 @@
-import { AdvancedSearchForm, type JSONObject, Section, SelectRow } from "@paperback/types";
+import {
+  AdvancedSearchForm,
+  type JSONObject,
+  Section,
+  SelectRow,
+  ToggleRow,
+} from "@paperback/types";
 
 export interface MangaHubSearchMeta extends JSONObject {
   genre: string[];
+  excludedGenre: string[];
+  requireAllGenres: boolean;
 }
 
 export const GENRE_OPTIONS: { id: string; label: string }[] = [
@@ -203,10 +211,14 @@ export class MangaHubSearchForm extends AdvancedSearchForm {
   override readonly requiresExplicitSubmission = true;
 
   private genre: string[];
+  private excludedGenre: string[];
+  private requireAllGenres: boolean;
 
   constructor(initialMeta?: MangaHubSearchMeta) {
     super();
     this.genre = initialMeta?.genre ?? [];
+    this.excludedGenre = initialMeta?.excludedGenre ?? [];
+    this.requireAllGenres = initialMeta?.requireAllGenres ?? false;
   }
 
   async updateGenre(value: string[]): Promise<void> {
@@ -214,25 +226,68 @@ export class MangaHubSearchForm extends AdvancedSearchForm {
     this.reloadForm();
   }
 
+  async updateExcludedGenre(value: string[]): Promise<void> {
+    this.excludedGenre = value;
+    this.reloadForm();
+  }
+
+  async updateRequireAllGenres(value: boolean): Promise<void> {
+    this.requireAllGenres = value;
+    this.reloadForm();
+  }
+
   getSearchQueryMetadata(): MangaHubSearchMeta {
-    return { genre: this.genre } satisfies MangaHubSearchMeta;
+    return {
+      genre: this.genre,
+      excludedGenre: this.excludedGenre,
+      requireAllGenres: this.requireAllGenres,
+    } satisfies MangaHubSearchMeta;
   }
 
   override getSections() {
     return [
-      Section({ id: "genre", header: "Genre" }, [
-        SelectRow("genre_select", {
-          title: "Genre",
-          value: this.genre,
-          options: GENRE_OPTIONS.map((opt) => ({ id: opt.id, title: opt.label })),
-          minItemCount: 0,
-          maxItemCount: 10,
-          onValueChange: Application.Selector<
-            MangaHubSearchForm,
-            (value: string[]) => Promise<void>
-          >(this, "updateGenre"),
-        }),
-      ]),
+      Section(
+        {
+          id: "genre",
+          header: "Genre",
+          footer:
+            'MangaHub\'s own search only matches any of the picked genres server-side; excluded genres and "require all" are applied to the results afterward on our end. If a genre is picked in both lists, excluded wins.',
+        },
+        [
+          SelectRow("genre_select", {
+            title: "Genre",
+            value: this.genre,
+            options: GENRE_OPTIONS.map((opt) => ({ id: opt.id, title: opt.label })),
+            minItemCount: 0,
+            maxItemCount: 10,
+            onValueChange: Application.Selector<
+              MangaHubSearchForm,
+              (value: string[]) => Promise<void>
+            >(this, "updateGenre"),
+          }),
+          ToggleRow("require_all_genres", {
+            title: "Require all selected genres",
+            subtitle: "Off matches any of them; on requires every one.",
+            value: this.requireAllGenres,
+            onValueChange: Application.Selector<
+              MangaHubSearchForm,
+              (value: boolean) => Promise<void>
+            >(this, "updateRequireAllGenres"),
+          }),
+          SelectRow("excluded_genre_select", {
+            title: "Excluded genre",
+            value: this.excludedGenre,
+            items: GENRE_OPTIONS.map((opt) => ({ id: opt.id, title: opt.label })),
+            layout: "list",
+            minItemCount: 0,
+            maxItemCount: GENRE_OPTIONS.length,
+            onValueChange: Application.Selector<
+              MangaHubSearchForm,
+              (value: string[]) => Promise<void>
+            >(this, "updateExcludedGenre"),
+          }),
+        ],
+      ),
     ];
   }
 }

@@ -13,6 +13,8 @@ import { GENRE_OPTIONS } from "./search";
 const BASE_URL_KEY_PREFIX = "mangahub.baseUrlOverride.";
 const GENERIC_TITLE_KEY_PREFIX = "mangahub.useGenericTitle.";
 const EXCLUDED_GENRES_KEY_PREFIX = "mangahub.excludedGenres.";
+const INCLUDED_GENRES_KEY_PREFIX = "mangahub.includedGenres.";
+const REQUIRE_ALL_INCLUDED_KEY_PREFIX = "mangahub.requireAllIncludedGenres.";
 const FILTERED_ORDER_KEY_PREFIX = "mangahub.filteredSectionOrder.";
 
 // Labels match the Discover section titles exactly (e.g. "Latest Updates",
@@ -38,6 +40,14 @@ function genericTitleKey(sourceName: string): string {
 
 function excludedGenresKey(sourceName: string): string {
   return `${EXCLUDED_GENRES_KEY_PREFIX}${sourceName}`;
+}
+
+function includedGenresKey(sourceName: string): string {
+  return `${INCLUDED_GENRES_KEY_PREFIX}${sourceName}`;
+}
+
+function requireAllIncludedKey(sourceName: string): string {
+  return `${REQUIRE_ALL_INCLUDED_KEY_PREFIX}${sourceName}`;
 }
 
 function filteredOrderKey(sourceName: string): string {
@@ -75,6 +85,24 @@ function setExcludedGenres(sourceName: string, value: string[]): void {
   Application.setState(value, excludedGenresKey(sourceName));
 }
 
+export function getIncludedGenres(sourceName: string): string[] {
+  const value = Application.getState(includedGenresKey(sourceName));
+  return Array.isArray(value) && value.every((v) => typeof v === "string") ? value : [];
+}
+
+function setIncludedGenres(sourceName: string, value: string[]): void {
+  Application.setState(value, includedGenresKey(sourceName));
+}
+
+export function getRequireAllIncludedGenres(sourceName: string): boolean {
+  const value = Application.getState(requireAllIncludedKey(sourceName));
+  return typeof value === "boolean" ? value : false;
+}
+
+function setRequireAllIncludedGenres(sourceName: string, value: boolean): void {
+  Application.setState(value, requireAllIncludedKey(sourceName));
+}
+
 export function getFilteredSectionOrder(sourceName: string): string {
   const value = Application.getState(filteredOrderKey(sourceName));
   return typeof value === "string" && value.length > 0 ? value : DEFAULT_FILTERED_ORDER;
@@ -88,6 +116,8 @@ export class MangaHubSettingsForm extends Form {
   private override: string;
   private genericTitle: boolean;
   private excludedGenres: string[];
+  private includedGenres: string[];
+  private requireAllIncluded: boolean;
   private filteredOrder: string;
 
   constructor(
@@ -98,6 +128,8 @@ export class MangaHubSettingsForm extends Form {
     this.override = getBaseUrlOverride(sourceName) ?? "";
     this.genericTitle = getUseGenericTitle(sourceName);
     this.excludedGenres = getExcludedGenres(sourceName);
+    this.includedGenres = getIncludedGenres(sourceName);
+    this.requireAllIncluded = getRequireAllIncludedGenres(sourceName);
     this.filteredOrder = getFilteredSectionOrder(sourceName);
   }
 
@@ -122,6 +154,20 @@ export class MangaHubSettingsForm extends Form {
   async updateExcludedGenres(value: string[]): Promise<void> {
     this.excludedGenres = value;
     setExcludedGenres(this.sourceName, value);
+    Application.invalidateDiscoverSections();
+    this.reloadForm();
+  }
+
+  async updateIncludedGenres(value: string[]): Promise<void> {
+    this.includedGenres = value;
+    setIncludedGenres(this.sourceName, value);
+    Application.invalidateDiscoverSections();
+    this.reloadForm();
+  }
+
+  async updateRequireAllIncluded(value: boolean): Promise<void> {
+    this.requireAllIncluded = value;
+    setRequireAllIncludedGenres(this.sourceName, value);
     Application.invalidateDiscoverSections();
     this.reloadForm();
   }
@@ -188,7 +234,7 @@ export class MangaHubSettingsForm extends Form {
           id: "discover_filtered",
           header: "Discover (Filtered)",
           footer:
-            "Manga tagged with any of the excluded genres are left out of the Discover (Filtered) section.",
+            "Manga tagged with an excluded genre are always left out. If a genre is picked in both lists, excluded wins. Included genres narrow the section down to only matching manga; leave empty to show everything (minus excluded).",
         },
         [
           SelectRow("excluded_genres_select", {
@@ -202,6 +248,28 @@ export class MangaHubSettingsForm extends Form {
               MangaHubSettingsForm,
               (value: string[]) => Promise<void>
             >(this, "updateExcludedGenres"),
+          }),
+          SelectRow("included_genres_select", {
+            title: "Included genres",
+            value: this.includedGenres,
+            items: GENRE_OPTIONS.map((opt) => ({ id: opt.id, title: opt.label })),
+            layout: "list",
+            minItemCount: 0,
+            maxItemCount: GENRE_OPTIONS.length,
+            onValueChange: Application.Selector<
+              MangaHubSettingsForm,
+              (value: string[]) => Promise<void>
+            >(this, "updateIncludedGenres"),
+          }),
+          ToggleRow("require_all_included", {
+            title: "Require all included genres",
+            subtitle:
+              "Off matches any of them (like MangaHub's own search); on requires every one.",
+            value: this.requireAllIncluded,
+            onValueChange: Application.Selector<
+              MangaHubSettingsForm,
+              (value: boolean) => Promise<void>
+            >(this, "updateRequireAllIncluded"),
           }),
           SelectRow("filtered_order_select", {
             title: "Order",

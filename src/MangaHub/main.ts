@@ -46,6 +46,8 @@ import {
   getBaseUrlOverride,
   getExcludedGenres,
   getFilteredSectionOrder,
+  getIncludedGenres,
+  getRequireAllIncludedGenres,
   getUseGenericTitle,
   MangaHubSettingsForm,
 } from "./settings";
@@ -118,6 +120,13 @@ interface MangaHubGqlResponse {
 interface MangaHubPagesPayload {
   p: string;
   i: string[];
+}
+
+// Genre labels (not ids) are already lowercased when stored here.
+interface GenreFilter {
+  excluded: ReadonlySet<string>;
+  included: ReadonlySet<string>;
+  requireAll: boolean;
 }
 
 // ----------------------------------------------------------------
@@ -375,9 +384,14 @@ export class MangaHubExtension implements MangaHubImplementation {
     // latestPopular() instead, since that has no offset for later pages.
     if (section.id === "latest" || section.id === "filtered") {
       const order = section.id === "filtered" ? getFilteredSectionOrder(this.sourceName) : "LATEST";
-      const excludedGenreLabels =
-        section.id === "filtered" ? this.getExcludedGenreLabels() : new Set<string>();
+      const genreFilter = section.id === "filtered" ? this.getFilteredGenreFilter() : undefined;
 
+      // Known limitation: latestPopular() rows carry no genres at all, so if
+      // included genres are configured this first page can't verify a match
+      // and comes back empty. Not actually broken — the row count below still
+      // signals a next page, and page 2 (search(mod:POPULAR), which does have
+      // genres) filters correctly. Revisit if MangaHub's own site behavior
+      // suggests a better fix than dropping latestPopular() outright.
       if (order === "POPULAR" && page === 1) {
         await this.primeHomeCache();
         const rows = this.homeCache?.popularUpdates ?? [];
@@ -385,7 +399,7 @@ export class MangaHubExtension implements MangaHubImplementation {
           rows,
           "simpleCarouselItem",
           undefined,
-          excludedGenreLabels,
+          genreFilter,
         );
         return {
           items,
@@ -398,7 +412,7 @@ export class MangaHubExtension implements MangaHubImplementation {
         rows,
         "simpleCarouselItem",
         previousSeenIds,
-        excludedGenreLabels,
+        genreFilter,
       );
       return {
         items,
@@ -475,7 +489,7 @@ export class MangaHubExtension implements MangaHubImplementation {
     rows: MangaHubMangaDto[],
     type: "featuredCarouselItem" | "simpleCarouselItem",
     previousSeenIds: ReadonlySet<number> = new Set(),
-    excludedGenreLabels: ReadonlySet<string> = new Set(),
+    genreFilter?: GenreFilter,
   ): { items: DiscoverSectionItem[]; seenIds: Set<number> } {
     const seenSlugs = new Set<string>();
     const seenIds = new Set<number>(previousSeenIds);
@@ -483,7 +497,7 @@ export class MangaHubExtension implements MangaHubImplementation {
     for (const row of rows) {
       const slug = row.slug ?? "";
       if (!slug) continue;
-      if (this.hasExcludedGenre(row.genres, excludedGenreLabels)) continue;
+      if (genreFilter && !this.passesGenreFilter(row.genres, genreFilter)) continue;
       // Only reads a cover already resolved via getMangaDetails — list views
       // never trigger an AniList lookup themselves.
       const imageUrl = this.thumbUrl(row.image) || getCachedCoverUrl(slug);
@@ -535,6 +549,14 @@ export class MangaHubExtension implements MangaHubImplementation {
 
     const order = sortingOption?.id || "POPULAR";
     const genre = searchMeta?.genre?.length ? searchMeta.genre.join(",") : "all";
+    // MangaHub's own genre filter only matches ANY of the selected genres
+    // server-side, and doesn't support exclusion at all — both "require all"
+    // and excluded genres are enforced here afterward instead.
+    const genreFilter: GenreFilter = {
+      excluded: this.genreIdsToLabels(searchMeta?.excludedGenre ?? []),
+      included: this.genreIdsToLabels(searchMeta?.genre ?? []),
+      requireAll: searchMeta?.requireAllGenres ?? false,
+    };
 
     const rows = await this.runSearch(titleQuery, genre, order, page);
 
@@ -548,6 +570,7 @@ export class MangaHubExtension implements MangaHubImplementation {
     for (const row of rows) {
       const slug = row.slug ?? "";
       if (!slug) continue;
+      if (!this.passesGenreFilter(row.genres, genreFilter)) continue;
       if (seenSlugs.has(slug)) continue;
       if (row.id !== undefined && seenIds.has(row.id)) continue;
       const mangaHubImageUrl = this.thumbUrl(row.image);
@@ -820,11 +843,19 @@ export class MangaHubExtension implements MangaHubImplementation {
     return url.startsWith(THUMB_CDN) || url.startsWith(IMAGE_CDN);
   }
 
-  private getExcludedGenreLabels(): Set<string> {
-    const excludedIds = new Set(getExcludedGenres(this.sourceName));
+  private genreIdsToLabels(ids: readonly string[]): Set<string> {
+    const idSet = new Set(ids);
     return new Set(
-      GENRE_OPTIONS.filter((opt) => excludedIds.has(opt.id)).map((opt) => opt.label.toLowerCase()),
+      GENRE_OPTIONS.filter((opt) => idSet.has(opt.id)).map((opt) => opt.label.toLowerCase()),
     );
+  }
+
+  private getFilteredGenreFilter(): GenreFilter {
+    return {
+      excluded: this.genreIdsToLabels(getExcludedGenres(this.sourceName)),
+      included: this.genreIdsToLabels(getIncludedGenres(this.sourceName)),
+      requireAll: getRequireAllIncludedGenres(this.sourceName),
+    };
   }
 
   private getFilteredOrderLabel(): string {
@@ -832,15 +863,26 @@ export class MangaHubExtension implements MangaHubImplementation {
     return FILTERED_SECTION_ORDER_OPTIONS.find((opt) => opt.id === order)?.label ?? order;
   }
 
-  private hasExcludedGenre(
-    rowGenres: string | undefined,
-    excludedGenreLabels: ReadonlySet<string>,
-  ): boolean {
-    if (!rowGenres || excludedGenreLabels.size === 0) return false;
-    return rowGenres
-      .split(",")
-      .map((g) => g.trim().toLowerCase())
-      .some((g) => excludedGenreLabels.has(g));
+  /**
+   * A genre in both excluded and included is treated as excluded only — it's
+   * dropped from the inclusion check so it can never "rescue" a manga that
+   * should be excluded.
+   */
+  private passesGenreFilter(rowGenres: string | undefined, filter: GenreFilter): boolean {
+    const rowGenreSet = new Set(
+      (rowGenres ?? "")
+        .split(",")
+        .map((g) => g.trim().toLowerCase())
+        .filter((g) => g.length > 0),
+    );
+    for (const excluded of filter.excluded) {
+      if (rowGenreSet.has(excluded)) return false;
+    }
+    const effectiveIncluded = [...filter.included].filter((g) => !filter.excluded.has(g));
+    if (effectiveIncluded.length === 0) return true;
+    return filter.requireAll
+      ? effectiveIncluded.every((g) => rowGenreSet.has(g))
+      : effectiveIncluded.some((g) => rowGenreSet.has(g));
   }
 
   private normalizeTitle(title: string | undefined): string {
