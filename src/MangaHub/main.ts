@@ -843,10 +843,26 @@ export class MangaHubExtension implements MangaHubImplementation {
     return url.startsWith(THUMB_CDN) || url.startsWith(IMAGE_CDN);
   }
 
+  /**
+   * MangaHub's per-manga genres field is free text and isn't always
+   * consistent with the canonical genre label — e.g. a manga can be tagged
+   * "Boys Love" even though the official genre is "Boys' Love". Apostrophes
+   * are stripped so both forms compare equal.
+   */
+  private normalizeGenreLabel(label: string): string {
+    return label
+      .toLowerCase()
+      .replace(/['’]/g, "")
+      .trim()
+      .replace(/\s+/g, " ");
+  }
+
   private genreIdsToLabels(ids: readonly string[]): Set<string> {
     const idSet = new Set(ids);
     return new Set(
-      GENRE_OPTIONS.filter((opt) => idSet.has(opt.id)).map((opt) => opt.label.toLowerCase()),
+      GENRE_OPTIONS.filter((opt) => idSet.has(opt.id)).map((opt) =>
+        this.normalizeGenreLabel(opt.label),
+      ),
     );
   }
 
@@ -872,7 +888,7 @@ export class MangaHubExtension implements MangaHubImplementation {
     const rowGenreSet = new Set(
       (rowGenres ?? "")
         .split(",")
-        .map((g) => g.trim().toLowerCase())
+        .map((g) => this.normalizeGenreLabel(g))
         .filter((g) => g.length > 0),
     );
     for (const excluded of filter.excluded) {

@@ -83,6 +83,7 @@ export const GENRE_OPTIONS: { id: string; label: string }[] = [
   { id: "gyaru", label: "Gyaru" },
   { id: "harem", label: "Harem" },
   { id: "harlequin", label: "Harlequin" },
+  { id: "hentai", label: "Hentai" },
   { id: "hero", label: "Hero" },
   { id: "historical", label: "Historical" },
   { id: "horror", label: "Horror" },
@@ -251,7 +252,7 @@ export class MangaHubSearchForm extends AdvancedSearchForm {
           id: "genre",
           header: "Genre",
           footer:
-            'MangaHub\'s own search only matches any of the picked genres server-side; excluded genres and "require all" are applied to the results afterward on our end. If a genre is picked in both lists, excluded wins.',
+            'MangaHub\'s own search only matches any of the picked genres server-side; excluded genres and "require all" are applied to the results afterward on our end. If a genre is picked in both lists, excluded wins. With "require all" on, matches can be rare — it may take a while (a lot of scrolling) before results start showing up.',
         },
         [
           SelectRow("genre_select", {

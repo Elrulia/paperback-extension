@@ -234,7 +234,7 @@ export class MangaHubSettingsForm extends Form {
           id: "discover_filtered",
           header: "Discover (Filtered)",
           footer:
-            "Manga tagged with an excluded genre are always left out. If a genre is picked in both lists, excluded wins. Included genres narrow the section down to only matching manga; leave empty to show everything (minus excluded).",
+            'Manga tagged with an excluded genre are always left out. If a genre is picked in both lists, excluded wins. Included genres narrow the section down to only matching manga; leave empty to show everything (minus excluded). With "Require all" on, matches can be rare — it may take a while (a lot of scrolling) before results start showing up.',
         },
         [
           SelectRow("excluded_genres_select", {
