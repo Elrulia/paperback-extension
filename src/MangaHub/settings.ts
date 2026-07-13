@@ -19,11 +19,9 @@ const FILTERED_ORDER_KEY_PREFIX = "mangahub.filteredSectionOrder.";
 
 // Labels match the Discover section titles exactly (e.g. "Latest Updates",
 // not "Updates") since they're also used to build "<order> (Filtered)".
-// POPULAR sources from the same latestPopular() feed as Popular Updates,
-// not the smaller Popular section, so it's labeled to match that.
 export const FILTERED_SECTION_ORDER_OPTIONS: { id: string; label: string }[] = [
   { id: "LATEST", label: "Latest Updates" },
-  { id: "POPULAR", label: "Popular Updates" },
+  { id: "POPULAR", label: "Popular" },
   { id: "ALPHABET", label: "A-Z" },
   { id: "NEW", label: "New Manga" },
   { id: "COMPLETED", label: "Completed" },

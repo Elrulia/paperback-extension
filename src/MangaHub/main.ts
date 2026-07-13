@@ -108,7 +108,6 @@ interface MangaHubGqlResponse {
     search?: { rows?: MangaHubMangaDto[] };
     manga?: MangaHubMangaDto;
     chapter?: MangaHubChapterPagesDto;
-    popularUpdates?: MangaHubMangaDto[];
     latest?: MangaHubMangaDto[];
     popular?: { rows?: MangaHubMangaDto[] };
     newManga?: { rows?: MangaHubMangaDto[] };
@@ -339,14 +338,13 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   async getDiscoverSections(): Promise<DiscoverSection[]> {
     return [
-      { id: "popular", title: "Popular", type: DiscoverSectionType.featured },
+      { id: "popular", title: "Popular", type: DiscoverSectionType.prominentCarousel },
       { id: "latest", title: "Latest Updates", type: DiscoverSectionType.simpleCarousel },
       {
         id: "filtered",
         title: `${this.getFilteredOrderLabel()} (Filtered)`,
         type: DiscoverSectionType.simpleCarousel,
       },
-      { id: "popularUpdates", title: "Popular Updates", type: DiscoverSectionType.simpleCarousel },
       { id: "newManga", title: "New Manga", type: DiscoverSectionType.simpleCarousel },
       { id: "completed", title: "Completed", type: DiscoverSectionType.simpleCarousel },
     ];
@@ -354,11 +352,7 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   private async primeHomeCache(): Promise<void> {
     if (this.homeCache) return;
-    // latestPopular() returns a different type (LatestManga) that has no
-    // genres field — unlike search() rows, which do. Requesting it there
-    // breaks this entire combined query, not just that one sub-query.
     const gql = `{
-      popularUpdates: latestPopular(x:${this.mangaSource}) { id title slug image }
       popular: search(x:${this.mangaSource},mod:POPULAR,limit:30) { rows { id title slug image genres } }
       newManga: search(x:${this.mangaSource},mod:NEW,limit:30) { rows { id title slug image genres } }
       completed: search(x:${this.mangaSource},mod:COMPLETED,limit:30) { rows { id title slug image genres } }
@@ -379,33 +373,10 @@ export class MangaHubExtension implements MangaHubImplementation {
     // A manga can be indexed under several alias titles sharing one id, and the
     // underlying order can also shift between fetches — seenIds catches both.
     // Filtered works the same way but with a user-configurable order and with
-    // excluded genres (from settings) dropped from the results — except when
-    // that order is POPULAR, which (like Popular Updates) sources page 1 from
-    // latestPopular() instead, since that has no offset for later pages.
+    // excluded genres (from settings) dropped from the results.
     if (section.id === "latest" || section.id === "filtered") {
       const order = section.id === "filtered" ? getFilteredSectionOrder(this.sourceName) : "LATEST";
       const genreFilter = section.id === "filtered" ? this.getFilteredGenreFilter() : undefined;
-
-      // Known limitation: latestPopular() rows carry no genres at all, so if
-      // included genres are configured this first page can't verify a match
-      // and comes back empty. Not actually broken — the row count below still
-      // signals a next page, and page 2 (search(mod:POPULAR), which does have
-      // genres) filters correctly. Revisit if MangaHub's own site behavior
-      // suggests a better fix than dropping latestPopular() outright.
-      if (order === "POPULAR" && page === 1) {
-        await this.primeHomeCache();
-        const rows = this.homeCache?.popularUpdates ?? [];
-        const { items, seenIds } = this.toDiscoverItems(
-          rows,
-          "simpleCarouselItem",
-          undefined,
-          genreFilter,
-        );
-        return {
-          items,
-          metadata: rows.length > 0 ? { page: 2, seenIds: [...seenIds] } : undefined,
-        };
-      }
 
       const rows = await this.runSearch("", "all", order, page);
       const { items, seenIds } = this.toDiscoverItems(
@@ -425,17 +396,9 @@ export class MangaHubExtension implements MangaHubImplementation {
       await this.primeHomeCache();
 
       switch (section.id) {
-        case "popularUpdates": {
-          const rows = this.homeCache?.popularUpdates ?? [];
-          const { items, seenIds } = this.toDiscoverItems(rows, "simpleCarouselItem");
-          return {
-            items,
-            metadata: rows.length > 0 ? { page: 2, seenIds: [...seenIds] } : undefined,
-          };
-        }
         case "popular": {
           const rows = this.homeCache?.popular?.rows ?? [];
-          const { items, seenIds } = this.toDiscoverItems(rows, "featuredCarouselItem");
+          const { items, seenIds } = this.toDiscoverItems(rows, "prominentCarouselItem");
           return {
             items,
             metadata: rows.length === PER_PAGE ? { page: 2, seenIds: [...seenIds] } : undefined,
@@ -463,10 +426,8 @@ export class MangaHubExtension implements MangaHubImplementation {
     }
 
     // Page 2+: paginate via search.
-    // Popular Updates falls back to search(mod:POPULAR) since latestPopular() has no offset.
     const orderMap: Record<string, string> = {
       popular: "POPULAR",
-      popularUpdates: "POPULAR",
       newManga: "NEW",
       completed: "COMPLETED",
     };
@@ -476,7 +437,7 @@ export class MangaHubExtension implements MangaHubImplementation {
     const rows = await this.runSearch("", "all", order, page);
     const { items, seenIds } = this.toDiscoverItems(
       rows,
-      section.id === "popular" ? "featuredCarouselItem" : "simpleCarouselItem",
+      section.id === "popular" ? "prominentCarouselItem" : "simpleCarouselItem",
       previousSeenIds,
     );
     return {
@@ -487,7 +448,7 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   private toDiscoverItems(
     rows: MangaHubMangaDto[],
-    type: "featuredCarouselItem" | "simpleCarouselItem",
+    type: "prominentCarouselItem" | "simpleCarouselItem",
     previousSeenIds: ReadonlySet<number> = new Set(),
     genreFilter?: GenreFilter,
   ): { items: DiscoverSectionItem[]; seenIds: Set<number> } {
