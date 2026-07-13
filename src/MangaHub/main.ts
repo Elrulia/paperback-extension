@@ -343,7 +343,7 @@ export class MangaHubExtension implements MangaHubImplementation {
       {
         id: "filtered",
         title: `${this.getFilteredOrderLabel()} (Filtered)`,
-        subtitle: "Order and genre filters are set in the extension's settings",
+        subtitle: "List and genre filters are set in the extension's settings",
         type: DiscoverSectionType.simpleCarousel,
       },
       { id: "newManga", title: "New Manga", type: DiscoverSectionType.simpleCarousel },

@@ -232,7 +232,7 @@ export class MangaHubSettingsForm extends Form {
           id: "discover_filtered",
           header: "Discover (Filtered)",
           footer:
-            'Manga tagged with an excluded genre are always left out. If a genre is picked in both lists, excluded wins. Included genres narrow the section down to only matching manga; leave empty to show everything (minus excluded). With "Require all" on, matches can be rare — it may take a while (a lot of scrolling) before results start showing up.',
+            "Manga tagged with an excluded genre are always left out. If a genre is picked in both lists, excluded wins. Included genres narrow the section down to only matching manga; leave empty to show everything (minus excluded).",
         },
         [
           SelectRow("excluded_genres_select", {
@@ -261,8 +261,7 @@ export class MangaHubSettingsForm extends Form {
           }),
           ToggleRow("require_all_included", {
             title: "Require all included genres",
-            subtitle:
-              "Off matches any of them (like MangaHub's own search); on requires every one.",
+            subtitle: "Off matches any of them; on requires all — can be slow to find matches.",
             value: this.requireAllIncluded,
             onValueChange: Application.Selector<
               MangaHubSettingsForm,
@@ -270,7 +269,7 @@ export class MangaHubSettingsForm extends Form {
             >(this, "updateRequireAllIncluded"),
           }),
           SelectRow("filtered_order_select", {
-            title: "Order",
+            title: "List",
             value: [this.filteredOrder],
             items: FILTERED_SECTION_ORDER_OPTIONS.map((opt) => ({ id: opt.id, title: opt.label })),
             layout: "list",

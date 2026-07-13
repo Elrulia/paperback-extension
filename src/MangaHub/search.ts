@@ -252,7 +252,7 @@ export class MangaHubSearchForm extends AdvancedSearchForm {
           id: "genre",
           header: "Genre",
           footer:
-            'MangaHub\'s own search only matches any of the picked genres server-side; excluded genres and "require all" are applied to the results afterward on our end. If a genre is picked in both lists, excluded wins. With "require all" on, matches can be rare — it may take a while (a lot of scrolling) before results start showing up.',
+            'MangaHub\'s own search only matches any of the picked genres server-side; excluded genres and "require all" are applied to the results afterward on our end. If a genre is picked in both lists, excluded wins.',
         },
         [
           SelectRow("genre_select", {
@@ -268,7 +268,7 @@ export class MangaHubSearchForm extends AdvancedSearchForm {
           }),
           ToggleRow("require_all_genres", {
             title: "Require all selected genres",
-            subtitle: "Off matches any of them; on requires every one.",
+            subtitle: "Off matches any of them; on requires all — can be slow to find matches.",
             value: this.requireAllGenres,
             onValueChange: Application.Selector<
               MangaHubSearchForm,
