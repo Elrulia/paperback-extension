@@ -10,7 +10,18 @@ export interface MangaHubSearchMeta extends JSONObject {
   genre: string[];
   excludedGenre: string[];
   requireAllGenres: boolean;
+  includedRatings: string[];
 }
+
+// Ids match the ContentRating enum's own string values (SAFE/MATURE/ADULT)
+// so they can be used directly without a translation layer. Empty selection
+// means no rating filter at all; otherwise only manga rated as one of the
+// picked values show up.
+export const RATING_OPTIONS: { id: string; label: string }[] = [
+  { id: "SAFE", label: "Safe" },
+  { id: "MATURE", label: "Mature" },
+  { id: "ADULT", label: "Adult" },
+];
 
 export const GENRE_OPTIONS: { id: string; label: string }[] = [
   { id: "4-koma", label: "4-Koma" },
@@ -214,12 +225,14 @@ export class MangaHubSearchForm extends AdvancedSearchForm {
   private genre: string[];
   private excludedGenre: string[];
   private requireAllGenres: boolean;
+  private includedRatings: string[];
 
   constructor(initialMeta?: MangaHubSearchMeta) {
     super();
     this.genre = initialMeta?.genre ?? [];
     this.excludedGenre = initialMeta?.excludedGenre ?? [];
     this.requireAllGenres = initialMeta?.requireAllGenres ?? false;
+    this.includedRatings = initialMeta?.includedRatings ?? [];
   }
 
   async updateGenre(value: string[]): Promise<void> {
@@ -237,11 +250,17 @@ export class MangaHubSearchForm extends AdvancedSearchForm {
     this.reloadForm();
   }
 
+  async updateIncludedRatings(value: string[]): Promise<void> {
+    this.includedRatings = value;
+    this.reloadForm();
+  }
+
   getSearchQueryMetadata(): MangaHubSearchMeta {
     return {
       genre: this.genre,
       excludedGenre: this.excludedGenre,
       requireAllGenres: this.requireAllGenres,
+      includedRatings: this.includedRatings,
     } satisfies MangaHubSearchMeta;
   }
 
@@ -250,9 +269,9 @@ export class MangaHubSearchForm extends AdvancedSearchForm {
       Section(
         {
           id: "genre",
-          header: "Genre",
+          header: "Genre & Rating",
           footer:
-            'MangaHub\'s own search only matches any of the picked genres server-side; excluded genres and "require all" are applied to the results afterward on our end. If a genre is picked in both lists, excluded wins.',
+            'MangaHub\'s own search only matches any of the picked genres server-side; excluded genres, "require all", and ratings are applied to the results afterward on our end. If a genre is picked in both lists, excluded wins.',
         },
         [
           SelectRow("genre_select", {
@@ -286,6 +305,19 @@ export class MangaHubSearchForm extends AdvancedSearchForm {
               MangaHubSearchForm,
               (value: string[]) => Promise<void>
             >(this, "updateExcludedGenre"),
+          }),
+          SelectRow("included_ratings_select", {
+            title: "Ratings",
+            subtitle: "Leave empty to show all ratings; otherwise only the picked ones show up.",
+            value: this.includedRatings,
+            items: RATING_OPTIONS.map((opt) => ({ id: opt.id, title: opt.label })),
+            layout: "list",
+            minItemCount: 0,
+            maxItemCount: RATING_OPTIONS.length,
+            onValueChange: Application.Selector<
+              MangaHubSearchForm,
+              (value: string[]) => Promise<void>
+            >(this, "updateIncludedRatings"),
           }),
         ],
       ),

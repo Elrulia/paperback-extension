@@ -47,6 +47,7 @@ import {
   getExcludedGenres,
   getFilteredSectionOrder,
   getIncludedGenres,
+  getIncludedRatings,
   getRequireAllIncludedGenres,
   getUseGenericTitle,
   MangaHubSettingsForm,
@@ -61,6 +62,25 @@ const THUMB_CDN = "https://thumb.mghcdn.com";
 const NO_COVER = "https://placehold.co/160x240?text=No+Cover";
 const PER_PAGE = 30;
 const ACCESS_KEY_STATE = "mangahub.accessKey";
+// Bounds how many extra pages a single filtered fetch will pull in to try to
+// fill a full batch — without this, a very strict genre/rating combo could
+// otherwise keep fetching indefinitely for a single scroll.
+const MAX_FILTER_FETCH_ATTEMPTS = 10;
+
+// Per-manga content rating, derived from its own genre tag ids — this is
+// distinct from (and doesn't affect) the source-level contentRating set in
+// the MangaHub instantiation below, which per the SDK docs gates whether the
+// whole source is visible to a user at all, not any individual manga's rating.
+const ADULT_GENRES = new Set(["pornographic", "adult", "smut", "r-18", "loli", "shota", "hentai"]);
+const MATURE_GENRES = new Set([
+  "erotica",
+  "ecchi",
+  "mature",
+  "suggestive",
+  "sexual-violence",
+  "gore",
+  "incest",
+]);
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -121,11 +141,14 @@ interface MangaHubPagesPayload {
   i: string[];
 }
 
-// Genre labels (not ids) are already lowercased when stored here.
-interface GenreFilter {
+// Genre labels (not ids) are already lowercased when stored here. An empty
+// includedRatings means no rating filter at all; otherwise only manga whose
+// derived rating is in the set pass.
+interface ContentFilter {
   excluded: ReadonlySet<string>;
   included: ReadonlySet<string>;
   requireAll: boolean;
+  includedRatings: ReadonlySet<ContentRating>;
 }
 
 // ----------------------------------------------------------------
@@ -374,21 +397,29 @@ export class MangaHubExtension implements MangaHubImplementation {
     // A manga can be indexed under several alias titles sharing one id, and the
     // underlying order can also shift between fetches — seenIds catches both.
     // Filtered works the same way but with a user-configurable order and with
-    // excluded genres (from settings) dropped from the results.
+    // excluded genres (from settings) dropped from the results. When filtering
+    // leaves a page thin (or empty), more pages are fetched internally — up to
+    // MAX_FILTER_FETCH_ATTEMPTS — to try to fill a full batch before returning.
     if (section.id === "latest" || section.id === "filtered") {
       const order = section.id === "filtered" ? getFilteredSectionOrder(this.sourceName) : "LATEST";
-      const genreFilter = section.id === "filtered" ? this.getFilteredGenreFilter() : undefined;
+      const genreFilter = section.id === "filtered" ? this.getFilteredContentFilter() : undefined;
 
-      const rows = await this.runSearch("", "all", order, page);
-      const { items, seenIds } = this.toDiscoverItems(
-        rows,
-        "simpleCarouselItem",
-        previousSeenIds,
-        genreFilter,
-      );
+      let currentPage = page;
+      let seenIds = new Set(previousSeenIds);
+      const items: DiscoverSectionItem[] = [];
+      let hasNextPage = true;
+      for (let attempt = 0; attempt < MAX_FILTER_FETCH_ATTEMPTS; attempt++) {
+        const rows = await this.runSearch("", "all", order, currentPage);
+        const built = this.toDiscoverItems(rows, "simpleCarouselItem", seenIds, genreFilter);
+        items.push(...built.items);
+        seenIds = built.seenIds;
+        currentPage += 1;
+        hasNextPage = rows.length === PER_PAGE;
+        if (!hasNextPage || items.length >= PER_PAGE) break;
+      }
       return {
         items,
-        metadata: rows.length === PER_PAGE ? { page: page + 1, seenIds: [...seenIds] } : undefined,
+        metadata: hasNextPage ? { page: currentPage, seenIds: [...seenIds] } : undefined,
       };
     }
 
@@ -451,7 +482,7 @@ export class MangaHubExtension implements MangaHubImplementation {
     rows: MangaHubMangaDto[],
     type: "prominentCarouselItem" | "simpleCarouselItem",
     previousSeenIds: ReadonlySet<number> = new Set(),
-    genreFilter?: GenreFilter,
+    genreFilter?: ContentFilter,
   ): { items: DiscoverSectionItem[]; seenIds: Set<number> } {
     const seenSlugs = new Set<string>();
     const seenIds = new Set<number>(previousSeenIds);
@@ -459,7 +490,7 @@ export class MangaHubExtension implements MangaHubImplementation {
     for (const row of rows) {
       const slug = row.slug ?? "";
       if (!slug) continue;
-      if (genreFilter && !this.passesGenreFilter(row.genres, genreFilter)) continue;
+      if (genreFilter && !this.passesContentFilter(row.genres, genreFilter)) continue;
       // Only reads a cover already resolved via getMangaDetails — list views
       // never trigger an AniList lookup themselves.
       const imageUrl = this.thumbUrl(row.image) || getCachedCoverUrl(slug);
@@ -477,6 +508,41 @@ export class MangaHubExtension implements MangaHubImplementation {
       });
     }
     return { items, seenIds };
+  }
+
+  private buildSearchResultsPage(
+    rows: MangaHubMangaDto[],
+    previousSeenIds: ReadonlySet<number>,
+    genreFilter: ContentFilter,
+  ): { results: SearchResultItem[]; seenIds: Set<number> } {
+    const seenSlugs = new Set<string>();
+    const seenIds = new Set<number>(previousSeenIds);
+    const results: SearchResultItem[] = [];
+    for (const row of rows) {
+      const slug = row.slug ?? "";
+      if (!slug) continue;
+      if (!this.passesContentFilter(row.genres, genreFilter)) continue;
+      if (seenSlugs.has(slug)) continue;
+      if (row.id !== undefined && seenIds.has(row.id)) continue;
+      const mangaHubImageUrl = this.thumbUrl(row.image);
+      // Only reads a cover already resolved via getMangaDetails — list views
+      // never trigger a lookup of their own.
+      const fallbackCoverUrl = mangaHubImageUrl ? undefined : getCachedCoverUrl(slug);
+      seenSlugs.add(slug);
+      if (row.id !== undefined) seenIds.add(row.id);
+      results.push({
+        mangaId: this.toSafeId(slug),
+        imageUrl: mangaHubImageUrl || fallbackCoverUrl || "",
+        title: row.title ?? "",
+        subtitle: fallbackCoverUrl
+          ? this.isMangaHubHostedUrl(fallbackCoverUrl)
+            ? "Alternate MangaHub cover"
+            : "Cover via AniList"
+          : undefined,
+        metadata: undefined,
+      });
+    }
+    return { results, seenIds };
   }
 
   // ----------------------------------------------------------------
@@ -512,55 +578,44 @@ export class MangaHubExtension implements MangaHubImplementation {
     const order = sortingOption?.id || "POPULAR";
     const genre = searchMeta?.genre?.length ? searchMeta.genre.join(",") : "all";
     // MangaHub's own genre filter only matches ANY of the selected genres
-    // server-side, and doesn't support exclusion at all — both "require all"
-    // and excluded genres are enforced here afterward instead.
-    const genreFilter: GenreFilter = {
+    // server-side, and doesn't support exclusion or rating filtering at all —
+    // "require all", excluded genres, and ratings are enforced here afterward.
+    const genreFilter: ContentFilter = {
       excluded: this.genreIdsToLabels(searchMeta?.excludedGenre ?? []),
       included: this.genreIdsToLabels(searchMeta?.genre ?? []),
       requireAll: searchMeta?.requireAllGenres ?? false,
+      includedRatings: new Set(searchMeta?.includedRatings ?? []) as ReadonlySet<ContentRating>,
     };
-
-    const rows = await this.runSearch(titleQuery, genre, order, page);
 
     // A manga can be indexed under several alias titles sharing one id, and
     // offset-based pagination against a reshuffling order (e.g. LATEST bumps a
     // manga on every new chapter) can also hand back a manga already seen on an
     // earlier page. seenIds catches both, mirroring the discover section above.
-    const seenSlugs = new Set<string>();
-    const seenIds = new Set<number>(previousSeenIds);
+    // When filtering leaves a page thin (or empty), more pages are fetched
+    // internally — up to MAX_FILTER_FETCH_ATTEMPTS — to try to fill a full
+    // batch before returning.
+    let currentPage = page;
+    let seenIds = new Set(previousSeenIds);
     const results: SearchResultItem[] = [];
-    for (const row of rows) {
-      const slug = row.slug ?? "";
-      if (!slug) continue;
-      if (!this.passesGenreFilter(row.genres, genreFilter)) continue;
-      if (seenSlugs.has(slug)) continue;
-      if (row.id !== undefined && seenIds.has(row.id)) continue;
-      const mangaHubImageUrl = this.thumbUrl(row.image);
-      // Only reads a cover already resolved via getMangaDetails — list views
-      // never trigger a lookup of their own.
-      const fallbackCoverUrl = mangaHubImageUrl ? undefined : getCachedCoverUrl(slug);
-      seenSlugs.add(slug);
-      if (row.id !== undefined) seenIds.add(row.id);
-      results.push({
-        mangaId: this.toSafeId(slug),
-        imageUrl: mangaHubImageUrl || fallbackCoverUrl || "",
-        title: row.title ?? "",
-        subtitle: fallbackCoverUrl
-          ? this.isMangaHubHostedUrl(fallbackCoverUrl)
-            ? "Alternate MangaHub cover"
-            : "Cover via AniList"
-          : undefined,
-        metadata: undefined,
-      });
+    let hasNextPage = true;
+    for (let attempt = 0; attempt < MAX_FILTER_FETCH_ATTEMPTS; attempt++) {
+      // Only cap pagination for text searches; genre browsing can scroll indefinitely.
+      if (titleQuery.length > 0 && currentPage > MangaHubExtension.MAX_SEARCH_PAGES) {
+        hasNextPage = false;
+        break;
+      }
+      const rows = await this.runSearch(titleQuery, genre, order, currentPage);
+      const built = this.buildSearchResultsPage(rows, seenIds, genreFilter);
+      results.push(...built.results);
+      seenIds = built.seenIds;
+      currentPage += 1;
+      hasNextPage = rows.length === PER_PAGE;
+      if (!hasNextPage || results.length >= PER_PAGE) break;
     }
 
-    const hasNextPage = rows.length === PER_PAGE;
-    // Only cap pagination for text searches; genre browsing can scroll indefinitely.
-    const reachedPageLimit = titleQuery.length > 0 && page >= MangaHubExtension.MAX_SEARCH_PAGES;
     return {
       items: results,
-      metadata:
-        hasNextPage && !reachedPageLimit ? { page: page + 1, seenIds: [...seenIds] } : undefined,
+      metadata: hasNextPage ? { page: currentPage, seenIds: [...seenIds] } : undefined,
     };
   }
 
@@ -648,20 +703,17 @@ export class MangaHubExtension implements MangaHubImplementation {
     const genres = (manga.genres ?? "")
       .split(",")
       .map((g) => g.trim())
-      .filter((g) => g.length > 0);
+      .filter((g) => g.length > 0)
+      .map((g) => ({
+        title: g,
+        id: g
+          .toLowerCase()
+          .replace(/\s+/g, "-")
+          .replace(/[^a-z0-9._\-@()[\]%?#+=/&:]/g, ""),
+      }));
     const tagGroups: TagSection[] = [];
     if (genres.length > 0) {
-      tagGroups.push({
-        id: "genres",
-        title: "Genres",
-        tags: genres.map((g) => ({
-          id: g
-            .toLowerCase()
-            .replace(/\s+/g, "-")
-            .replace(/[^a-z0-9._\-@()[\]%?#+=/&:]/g, ""),
-          title: g,
-        })),
-      });
+      tagGroups.push({ id: "genres", title: "Genres", tags: genres });
     }
 
     let synopsis = manga.description ?? "";
@@ -702,7 +754,7 @@ export class MangaHubExtension implements MangaHubImplementation {
         author: this.cleanField(manga.author),
         artist: this.cleanField(manga.artist),
         synopsis: synopsis.trim(),
-        contentRating: this.contentRating,
+        contentRating: this.deriveContentRating(new Set(genres.map((g) => g.id))),
         status: this.parseStatus(manga.status ?? ""),
         tagGroups,
         shareUrl: this.getMangaShareUrl(mangaId),
@@ -828,11 +880,12 @@ export class MangaHubExtension implements MangaHubImplementation {
     );
   }
 
-  private getFilteredGenreFilter(): GenreFilter {
+  private getFilteredContentFilter(): ContentFilter {
     return {
       excluded: this.genreIdsToLabels(getExcludedGenres(this.sourceName)),
       included: this.genreIdsToLabels(getIncludedGenres(this.sourceName)),
       requireAll: getRequireAllIncludedGenres(this.sourceName),
+      includedRatings: new Set(getIncludedRatings(this.sourceName)) as ReadonlySet<ContentRating>,
     };
   }
 
@@ -841,12 +894,39 @@ export class MangaHubExtension implements MangaHubImplementation {
     return FILTERED_SECTION_ORDER_OPTIONS.find((opt) => opt.id === order)?.label ?? order;
   }
 
+  // Same normalization as the genre tag ids built in getMangaDetails, so a
+  // manga's derived content rating is consistent wherever it's computed from.
+  private genreTextToIds(genresText: string | undefined): Set<string> {
+    return new Set(
+      (genresText ?? "")
+        .split(",")
+        .map((g) => g.trim())
+        .filter((g) => g.length > 0)
+        .map((g) =>
+          g
+            .toLowerCase()
+            .replace(/\s+/g, "-")
+            .replace(/[^a-z0-9._\-@()[\]%?#+=/&:]/g, ""),
+        ),
+    );
+  }
+
+  private deriveContentRating(genreIds: ReadonlySet<string>): ContentRating {
+    for (const id of genreIds) {
+      if (ADULT_GENRES.has(id)) return ContentRating.ADULT;
+    }
+    for (const id of genreIds) {
+      if (MATURE_GENRES.has(id)) return ContentRating.MATURE;
+    }
+    return ContentRating.EVERYONE;
+  }
+
   /**
    * A genre in both excluded and included is treated as excluded only — it's
    * dropped from the inclusion check so it can never "rescue" a manga that
    * should be excluded.
    */
-  private passesGenreFilter(rowGenres: string | undefined, filter: GenreFilter): boolean {
+  private passesContentFilter(rowGenres: string | undefined, filter: ContentFilter): boolean {
     const rowGenreSet = new Set(
       (rowGenres ?? "")
         .split(",")
@@ -857,10 +937,17 @@ export class MangaHubExtension implements MangaHubImplementation {
       if (rowGenreSet.has(excluded)) return false;
     }
     const effectiveIncluded = [...filter.included].filter((g) => !filter.excluded.has(g));
-    if (effectiveIncluded.length === 0) return true;
-    return filter.requireAll
-      ? effectiveIncluded.every((g) => rowGenreSet.has(g))
-      : effectiveIncluded.some((g) => rowGenreSet.has(g));
+    if (effectiveIncluded.length > 0) {
+      const matchesIncluded = filter.requireAll
+        ? effectiveIncluded.every((g) => rowGenreSet.has(g))
+        : effectiveIncluded.some((g) => rowGenreSet.has(g));
+      if (!matchesIncluded) return false;
+    }
+    if (filter.includedRatings.size > 0) {
+      const rating = this.deriveContentRating(this.genreTextToIds(rowGenres));
+      if (!filter.includedRatings.has(rating)) return false;
+    }
+    return true;
   }
 
   private normalizeTitle(title: string | undefined): string {

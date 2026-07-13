@@ -3,18 +3,20 @@ import {
   Form,
   InputRow,
   LabelRow,
+  NavigationRow,
   Section,
   SelectRow,
   ToggleRow,
 } from "@paperback/types";
 
-import { GENRE_OPTIONS } from "./search";
+import { GENRE_OPTIONS, RATING_OPTIONS } from "./search";
 
 const BASE_URL_KEY_PREFIX = "mangahub.baseUrlOverride.";
 const GENERIC_TITLE_KEY_PREFIX = "mangahub.useGenericTitle.";
 const EXCLUDED_GENRES_KEY_PREFIX = "mangahub.excludedGenres.";
 const INCLUDED_GENRES_KEY_PREFIX = "mangahub.includedGenres.";
 const REQUIRE_ALL_INCLUDED_KEY_PREFIX = "mangahub.requireAllIncludedGenres.";
+const INCLUDED_RATINGS_KEY_PREFIX = "mangahub.includedRatings.";
 const FILTERED_ORDER_KEY_PREFIX = "mangahub.filteredSectionOrder.";
 
 // Labels match the Discover section titles exactly (e.g. "Latest Updates",
@@ -46,6 +48,10 @@ function includedGenresKey(sourceName: string): string {
 
 function requireAllIncludedKey(sourceName: string): string {
   return `${REQUIRE_ALL_INCLUDED_KEY_PREFIX}${sourceName}`;
+}
+
+function includedRatingsKey(sourceName: string): string {
+  return `${INCLUDED_RATINGS_KEY_PREFIX}${sourceName}`;
 }
 
 function filteredOrderKey(sourceName: string): string {
@@ -101,6 +107,15 @@ function setRequireAllIncludedGenres(sourceName: string, value: boolean): void {
   Application.setState(value, requireAllIncludedKey(sourceName));
 }
 
+export function getIncludedRatings(sourceName: string): string[] {
+  const value = Application.getState(includedRatingsKey(sourceName));
+  return Array.isArray(value) && value.every((v) => typeof v === "string") ? value : [];
+}
+
+function setIncludedRatings(sourceName: string, value: string[]): void {
+  Application.setState(value, includedRatingsKey(sourceName));
+}
+
 export function getFilteredSectionOrder(sourceName: string): string {
   const value = Application.getState(filteredOrderKey(sourceName));
   return typeof value === "string" && value.length > 0 ? value : DEFAULT_FILTERED_ORDER;
@@ -110,13 +125,8 @@ function setFilteredSectionOrder(sourceName: string, value: string): void {
   Application.setState(value, filteredOrderKey(sourceName));
 }
 
-export class MangaHubSettingsForm extends Form {
+export class MangaHubConnectionSettingsForm extends Form {
   private override: string;
-  private genericTitle: boolean;
-  private excludedGenres: string[];
-  private includedGenres: string[];
-  private requireAllIncluded: boolean;
-  private filteredOrder: string;
 
   constructor(
     private readonly sourceName: string,
@@ -124,11 +134,6 @@ export class MangaHubSettingsForm extends Form {
   ) {
     super();
     this.override = getBaseUrlOverride(sourceName) ?? "";
-    this.genericTitle = getUseGenericTitle(sourceName);
-    this.excludedGenres = getExcludedGenres(sourceName);
-    this.includedGenres = getIncludedGenres(sourceName);
-    this.requireAllIncluded = getRequireAllIncludedGenres(sourceName);
-    this.filteredOrder = getFilteredSectionOrder(sourceName);
   }
 
   async updateOverride(value: string): Promise<void> {
@@ -143,10 +148,94 @@ export class MangaHubSettingsForm extends Form {
     this.reloadForm();
   }
 
+  override getSections() {
+    const effective =
+      this.override.trim().length > 0
+        ? this.override.trim().replace(/\/+$/, "")
+        : this.defaultBaseUrl;
+
+    return [
+      Section(
+        {
+          id: "base_url",
+          footer: `Override the site address if this source has moved to a new domain. Leave empty to use the default. Include the scheme, e.g. ${this.defaultBaseUrl}`,
+        },
+        [
+          InputRow("base_url_input", {
+            title: "Base URL",
+            value: this.override,
+            onValueChange: Application.Selector<
+              MangaHubConnectionSettingsForm,
+              (value: string) => Promise<void>
+            >(this, "updateOverride"),
+          }),
+          LabelRow("base_url_current", {
+            title: "Currently using",
+            value: effective,
+          }),
+          ButtonRow("base_url_reset", {
+            title: "Reset to default",
+            onSelect: Application.Selector<MangaHubConnectionSettingsForm, () => Promise<void>>(
+              this,
+              "resetOverride",
+            ),
+          }),
+        ],
+      ),
+    ];
+  }
+}
+
+export class MangaHubChaptersSettingsForm extends Form {
+  private genericTitle: boolean;
+
+  constructor(private readonly sourceName: string) {
+    super();
+    this.genericTitle = getUseGenericTitle(sourceName);
+  }
+
   async updateGenericTitle(value: boolean): Promise<void> {
     this.genericTitle = value;
     setUseGenericTitle(this.sourceName, value);
     this.reloadForm();
+  }
+
+  override getSections() {
+    return [
+      Section(
+        {
+          id: "chapters",
+          footer: 'Use a generic chapter title ("Chapter X") instead of the provided one.',
+        },
+        [
+          ToggleRow("use_generic_title", {
+            title: "Use generic title",
+            value: this.genericTitle,
+            onValueChange: Application.Selector<
+              MangaHubChaptersSettingsForm,
+              (value: boolean) => Promise<void>
+            >(this, "updateGenericTitle"),
+          }),
+        ],
+      ),
+    ];
+  }
+}
+
+export class MangaHubDiscoverFilteredSettingsForm extends Form {
+  private excludedGenres: string[];
+  private includedGenres: string[];
+  private requireAllIncluded: boolean;
+  private includedRatings: string[];
+  private filteredOrder: string;
+
+  constructor(private readonly sourceName: string) {
+    super();
+    this.excludedGenres = getExcludedGenres(sourceName);
+    this.includedGenres = getIncludedGenres(sourceName);
+    this.requireAllIncluded = getRequireAllIncludedGenres(sourceName);
+    this.includedRatings = getIncludedRatings(sourceName);
+    this.filteredOrder = getFilteredSectionOrder(sourceName);
   }
 
   async updateExcludedGenres(value: string[]): Promise<void> {
@@ -170,6 +259,13 @@ export class MangaHubSettingsForm extends Form {
     this.reloadForm();
   }
 
+  async updateIncludedRatings(value: string[]): Promise<void> {
+    this.includedRatings = value;
+    setIncludedRatings(this.sourceName, value);
+    Application.invalidateDiscoverSections();
+    this.reloadForm();
+  }
+
   async updateFilteredOrder(value: string[]): Promise<void> {
     this.filteredOrder = value[0] ?? DEFAULT_FILTERED_ORDER;
     setFilteredSectionOrder(this.sourceName, this.filteredOrder);
@@ -178,59 +274,10 @@ export class MangaHubSettingsForm extends Form {
   }
 
   override getSections() {
-    const effective =
-      this.override.trim().length > 0
-        ? this.override.trim().replace(/\/+$/, "")
-        : this.defaultBaseUrl;
-
     return [
       Section(
         {
-          id: "base_url",
-          footer: `Override the site address if this source has moved to a new domain. Leave empty to use the default. Include the scheme, e.g. ${this.defaultBaseUrl}`,
-        },
-        [
-          InputRow("base_url_input", {
-            title: "Base URL",
-            value: this.override,
-            onValueChange: Application.Selector<
-              MangaHubSettingsForm,
-              (value: string) => Promise<void>
-            >(this, "updateOverride"),
-          }),
-          LabelRow("base_url_current", {
-            title: "Currently using",
-            value: effective,
-          }),
-          ButtonRow("base_url_reset", {
-            title: "Reset to default",
-            onSelect: Application.Selector<MangaHubSettingsForm, () => Promise<void>>(
-              this,
-              "resetOverride",
-            ),
-          }),
-        ],
-      ),
-      Section(
-        {
-          id: "chapters",
-          footer: 'Use a generic chapter title ("Chapter X") instead of the provided one.',
-        },
-        [
-          ToggleRow("use_generic_title", {
-            title: "Use generic title",
-            value: this.genericTitle,
-            onValueChange: Application.Selector<
-              MangaHubSettingsForm,
-              (value: boolean) => Promise<void>
-            >(this, "updateGenericTitle"),
-          }),
-        ],
-      ),
-      Section(
-        {
           id: "discover_filtered",
-          header: "Discover (Filtered)",
           footer:
             "Manga tagged with an excluded genre are always left out. If a genre is picked in both lists, excluded wins. Included genres narrow the section down to only matching manga; leave empty to show everything (minus excluded).",
         },
@@ -243,7 +290,7 @@ export class MangaHubSettingsForm extends Form {
             minItemCount: 0,
             maxItemCount: GENRE_OPTIONS.length,
             onValueChange: Application.Selector<
-              MangaHubSettingsForm,
+              MangaHubDiscoverFilteredSettingsForm,
               (value: string[]) => Promise<void>
             >(this, "updateExcludedGenres"),
           }),
@@ -255,7 +302,7 @@ export class MangaHubSettingsForm extends Form {
             minItemCount: 0,
             maxItemCount: GENRE_OPTIONS.length,
             onValueChange: Application.Selector<
-              MangaHubSettingsForm,
+              MangaHubDiscoverFilteredSettingsForm,
               (value: string[]) => Promise<void>
             >(this, "updateIncludedGenres"),
           }),
@@ -264,9 +311,22 @@ export class MangaHubSettingsForm extends Form {
             subtitle: "Off matches any of them; on requires all — can be slow to find matches.",
             value: this.requireAllIncluded,
             onValueChange: Application.Selector<
-              MangaHubSettingsForm,
+              MangaHubDiscoverFilteredSettingsForm,
               (value: boolean) => Promise<void>
             >(this, "updateRequireAllIncluded"),
+          }),
+          SelectRow("included_ratings_select", {
+            title: "Ratings",
+            subtitle: "Leave empty to show all ratings; otherwise only the picked ones show up.",
+            value: this.includedRatings,
+            items: RATING_OPTIONS.map((opt) => ({ id: opt.id, title: opt.label })),
+            layout: "list",
+            minItemCount: 0,
+            maxItemCount: RATING_OPTIONS.length,
+            onValueChange: Application.Selector<
+              MangaHubDiscoverFilteredSettingsForm,
+              (value: string[]) => Promise<void>
+            >(this, "updateIncludedRatings"),
           }),
           SelectRow("filtered_order_select", {
             title: "List",
@@ -276,12 +336,43 @@ export class MangaHubSettingsForm extends Form {
             minItemCount: 1,
             maxItemCount: 1,
             onValueChange: Application.Selector<
-              MangaHubSettingsForm,
+              MangaHubDiscoverFilteredSettingsForm,
               (value: string[]) => Promise<void>
             >(this, "updateFilteredOrder"),
           }),
         ],
       ),
+    ];
+  }
+}
+
+export class MangaHubSettingsForm extends Form {
+  constructor(
+    private readonly sourceName: string,
+    private readonly defaultBaseUrl: string,
+  ) {
+    super();
+  }
+
+  override getSections() {
+    return [
+      Section({ id: "menu" }, [
+        NavigationRow("connection_nav", {
+          title: "Connection",
+          subtitle: "Override the site address",
+          form: new MangaHubConnectionSettingsForm(this.sourceName, this.defaultBaseUrl),
+        }),
+        NavigationRow("chapters_nav", {
+          title: "Chapters",
+          subtitle: "Chapter title display",
+          form: new MangaHubChaptersSettingsForm(this.sourceName),
+        }),
+        NavigationRow("discover_filtered_nav", {
+          title: "Discover (Filtered)",
+          subtitle: "Genre and rating filters, list order",
+          form: new MangaHubDiscoverFilteredSettingsForm(this.sourceName),
+        }),
+      ]),
     ];
   }
 }
