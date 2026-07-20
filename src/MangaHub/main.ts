@@ -67,6 +67,12 @@ const ACCESS_KEY_STATE = "mangahub.accessKey";
 // otherwise keep fetching indefinitely for a single scroll.
 const MAX_FILTER_FETCH_ATTEMPTS = 10;
 
+// Meaningless language/upload tags some MangaHub chapter titles are left with
+// after the redundant chapter-number restatement is stripped off (e.g. the
+// raw title "7.3-eng-li" is just chapter 7.3 restated plus this tag) — not a
+// real chapter title, so dropped entirely rather than shown as extra text.
+const NOISE_CHAPTER_TITLE_SUFFIXES = new Set(["eng-li"]);
+
 // Per-manga content rating, derived from its own genre tag ids — this is
 // distinct from (and doesn't affect) the source-level contentRating set in
 // the MangaHub instantiation below, which per the SDK docs gates whether the
@@ -809,22 +815,36 @@ export class MangaHubExtension implements MangaHubImplementation {
   }
 
   /**
-   * Strips a leading "Ch. N:" style restatement of this exact chapter's own
-   * number, keeping only genuine extra text (a real title, or a scan-group
-   * credit) if any remains. Only matches this chapter's own number, not any
-   * digit, so it can't misfire on titles that coincidentally start with an
-   * unrelated number.
+   * Strips a leading restatement of this exact chapter's own number, keeping
+   * only genuine extra text (a real title, or a scan-group credit like
+   * "ASURA SCANS") if any remains — known meaningless tags (see
+   * NOISE_CHAPTER_TITLE_SUFFIXES) are dropped too. Zero-padded numbers are
+   * matched too (e.g. "Ch.029" for chapter 29). The trailing (?![0-9a-z])
+   * guards against matching a mere numeric prefix of an unrelated token —
+   * chapter 2 must not match inside "20th Century" (another digit follows)
+   * or "2nd Season" (a letter follows, which would otherwise mangle it into
+   * "nd Season").
+   *
+   * A "Chapter"/"Ch." word before the number (e.g. "Ch.029: Foo") is an
+   * unambiguous signal, so that form is always stripped regardless of what
+   * follows. A bare number with no such word (e.g. "7.3-eng-li") has no such
+   * signal, so it's only treated as a restatement when nothing of substance
+   * is left afterwards — otherwise a real title that coincidentally starts
+   * with this chapter's own number (e.g. "5 Days Later" for chapter 5) would
+   * wrongly lose its leading number.
    *
    * A leading "Vol.X" marker is handled separately and kept (e.g. "Vol.15 -
    * Chapter 71" becomes "Vol.15") since it's genuine info, not a restatement.
    */
   private stripRedundantChapterPrefix(rawTitle: string, chapterNumber: number): string {
     const volRegex = /^(vol\.?\s*\d+)\s*[-:]?\s*/i;
-    const numberPattern = chapterNumber.toString().replace(".", "\\.");
-    const chapterRegex = new RegExp(
-      `^(?:chapter|ch\\.?)\\s*\\.?\\s*${numberPattern}\\s*[:.,-]?\\s*`,
+    const [intPart, fracPart] = chapterNumber.toString().split(".");
+    const numberBody = fracPart !== undefined ? `0*${intPart}\\.${fracPart}` : `0*${intPart}`;
+    const wordedRegex = new RegExp(
+      `^(?:chapter|ch\\.?)\\s*\\.?\\s*${numberBody}(?![0-9a-z])\\s*[:.,-]?\\s*`,
       "i",
     );
+    const bareRegex = new RegExp(`^${numberBody}(?![0-9a-z])\\s*[:.,-]?\\s*`, "i");
 
     let title = rawTitle.trim();
     let volPrefix = "";
@@ -833,7 +853,22 @@ export class MangaHubExtension implements MangaHubImplementation {
       volPrefix = volMatch[1] ?? "";
       title = title.slice(volMatch[0].length).trim();
     }
-    title = title.replace(chapterRegex, "").trim();
+
+    const wordedMatch = title.match(wordedRegex);
+    if (wordedMatch) {
+      title = title.slice(wordedMatch[0].length).trim();
+    } else {
+      const bareMatch = title.match(bareRegex);
+      if (bareMatch) {
+        const remainder = title.slice(bareMatch[0].length).trim();
+        if (remainder.length === 0 || NOISE_CHAPTER_TITLE_SUFFIXES.has(remainder.toLowerCase())) {
+          title = remainder;
+        }
+      }
+    }
+    if (NOISE_CHAPTER_TITLE_SUFFIXES.has(title.toLowerCase())) {
+      title = "";
+    }
 
     if (volPrefix.length > 0) {
       return title.length > 0 ? `${volPrefix} - ${title}` : volPrefix;
