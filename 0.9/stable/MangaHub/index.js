@@ -14,7 +14,7 @@ var source=(function(e){Object.defineProperty(e,Symbol.toStringTag,{value:`Modul
       manga(x:${this.mangaSource},slug:${JSON.stringify(t)}) {
         chapters { number title date }
       }
-    }`,r=(await this.graphQL(n,t)).data?.manga??{},i=U(this.sourceName),a=[...r.chapters??[]].reverse(),o=new Set,s=[];for(let t of a){if(o.has(t.number))continue;o.add(t.number);let n=String(t.number),r=n,a;a=i?`Chapter ${n}`:t.title&&/\d/.test(t.title)?t.title:t.title?.trim()?`Chapter ${n} - ${t.title.trim()}`:`Chapter ${n}`,s.push({chapterId:r,sourceManga:e,title:a,volume:0,chapNum:t.number,publishDate:this.parseDate(t.date),langCode:this.langCode})}return s}async getChapterDetails(e){let t=this.slugFromId(e.sourceManga.mangaId),n=parseFloat(e.chapterId)||0,r=`{
+    }`,r=(await this.graphQL(n,t)).data?.manga??{},i=U(this.sourceName),a=[...r.chapters??[]].reverse(),o=new Set,s=[];for(let t of a){if(o.has(t.number))continue;o.add(t.number);let n=String(t.number),r;if(!i&&t.title){let e=this.stripRedundantChapterPrefix(t.title,t.number);r=e.length>0?e:void 0}s.push({chapterId:n,sourceManga:e,title:r,volume:0,chapNum:t.number,publishDate:this.parseDate(t.date),langCode:this.langCode})}return s}stripRedundantChapterPrefix(e,t){let n=/^(vol\.?\s*\d+)\s*[-:]?\s*/i,r=t.toString().replace(`.`,`\\.`),i=RegExp(`^(?:chapter|ch\\.?)\\s*\\.?\\s*${r}\\s*[:.,-]?\\s*`,`i`),a=e.trim(),o=``,s=a.match(n);return s&&(o=s[1]??``,a=a.slice(s[0].length).trim()),a=a.replace(i,``).trim(),o.length>0?a.length>0?`${o} - ${a}`:o:a}async getChapterDetails(e){let t=this.slugFromId(e.sourceManga.mangaId),n=parseFloat(e.chapterId)||0,r=`{
       chapter(x:${this.mangaSource},slug:${JSON.stringify(t)},number:${n}) {
         pages
       }
