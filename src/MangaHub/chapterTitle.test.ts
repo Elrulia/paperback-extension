@@ -24,19 +24,24 @@ const cases: [title: string, chapterNumber: number, expected: string][] = [
   ["Chapter 2 - The title of chapter Part 1", 2, "The title of chapter Part 1"],
   ["Chapter 2 - Chapter Two Begins", 2, "Chapter Two Begins"],
 
-  // scan-group credits and real titles left completely untouched
+  // real scan-group credits and real titles left completely untouched
   ["ASURA SCANS", 54, "ASURA SCANS"],
   ["MANGABLAZE", 8.2, "MANGABLAZE"],
-  ["SCANSLATION", 3, "SCANSLATION"],
   ["Miyakata Amane the Dollmaker", 1, "Miyakata Amane the Dollmaker"],
   ["Franchise Business Startup Fraud VI", 64, "Franchise Business Startup Fraud VI"],
 
-  // known noise suffix dropped, with or without a word prefix
+  // known noise suffix dropped, with or without a word prefix — "Scanslation"
+  // is the generic literal placeholder left when the uploader never filled
+  // in the actual scan-group name, not a real credit
   ["7.3-eng-li", 7.3, ""],
   ["5.2-eng-li", 5.2, ""],
   ["6.1-eng-li", 6.1, ""],
   ["ENG-LI", 21, ""],
   ["21-eng-li", 21, ""],
+  ["SCANSLATION", 3, ""],
+  ["Scanslation", 21, ""],
+  ["Chapter 21 - Scanslation", 21, ""],
+  ["21-Scanslation", 21, ""],
 
   // dash used as the decimal separator (matches MangaHub's slug convention)
   ["41-5-eng-li", 41.5, ""],

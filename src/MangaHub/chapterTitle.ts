@@ -1,8 +1,11 @@
 // Meaningless language/upload tags some MangaHub chapter titles are left with
 // after the redundant chapter-number restatement is stripped off (e.g. the
-// raw title "7.3-eng-li" is just chapter 7.3 restated plus this tag) — not a
-// real chapter title, so dropped entirely rather than shown as extra text.
-export const NOISE_CHAPTER_TITLE_SUFFIXES = new Set(["eng-li"]);
+// raw title "7.3-eng-li" is just chapter 7.3 restated plus this tag), plus
+// the generic literal word "Scanslation" left behind when whoever uploaded
+// the chapter failed to fill in the actual scan-group name — none of these
+// are a real chapter title, so they're dropped entirely rather than shown as
+// extra text.
+export const NOISE_CHAPTER_TITLE_SUFFIXES = new Set(["eng-li", "scanslation"]);
 
 /**
  * Strips a leading restatement of this exact chapter's own number, keeping
