@@ -12,6 +12,10 @@
     "moduleResolution": "bundler",
     "target": "esnext",
     "resolveJsonModule": true,
+    // Node's own ESM loader (used to run the unit tests directly, unlike the
+    // paperback-cli bundler which handles extension-less specifiers itself)
+    // requires an explicit extension on relative imports.
+    "allowImportingTsExtensions": true,
 
     // Other Outputs
     // "sourceMap": true,
@@ -39,7 +43,8 @@
     "forceConsistentCasingInFileNames": true,
     "noUncheckedSideEffectImports": true,
     "moduleDetection": "force",
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": ["node"]
   },
   "exclude": ["./src/tests", "./templates"]
 }
