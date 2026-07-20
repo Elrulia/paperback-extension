@@ -785,15 +785,15 @@ export class MangaHubExtension implements MangaHubImplementation {
       seenChapNums.add(ch.number);
       const numberString = String(ch.number);
       const chapterId = numberString;
-      let title: string;
-      if (useGeneric) {
-        title = `Chapter ${numberString}`;
-      } else if (ch.title && /\d/.test(ch.title)) {
-        title = ch.title;
-      } else if (ch.title?.trim()) {
-        title = `Chapter ${numberString} - ${ch.title.trim()}`;
-      } else {
-        title = `Chapter ${numberString}`;
+      // Paperback already displays "Chapter N" on its own and appends this
+      // title after it — so title here must only ever be the *extra* part
+      // (a real chapter title, or a scan-group credit like "ASURA SCANS"),
+      // never a restatement of the chapter number, or it shows up doubled
+      // (e.g. "Chapter 1 - Chapter 1", "Chapter 54 - Chapter 54 - ASURA SCANS").
+      let title: string | undefined;
+      if (!useGeneric && ch.title) {
+        const stripped = this.stripRedundantChapterPrefix(ch.title, ch.number);
+        title = stripped.length > 0 ? stripped : undefined;
       }
       chapters.push({
         chapterId,
@@ -806,6 +806,39 @@ export class MangaHubExtension implements MangaHubImplementation {
       });
     }
     return chapters;
+  }
+
+  /**
+   * Strips a leading "Ch. N:" style restatement of this exact chapter's own
+   * number, keeping only genuine extra text (a real title, or a scan-group
+   * credit) if any remains. Only matches this chapter's own number, not any
+   * digit, so it can't misfire on titles that coincidentally start with an
+   * unrelated number.
+   *
+   * A leading "Vol.X" marker is handled separately and kept (e.g. "Vol.15 -
+   * Chapter 71" becomes "Vol.15") since it's genuine info, not a restatement.
+   */
+  private stripRedundantChapterPrefix(rawTitle: string, chapterNumber: number): string {
+    const volRegex = /^(vol\.?\s*\d+)\s*[-:]?\s*/i;
+    const numberPattern = chapterNumber.toString().replace(".", "\\.");
+    const chapterRegex = new RegExp(
+      `^(?:chapter|ch\\.?)\\s*\\.?\\s*${numberPattern}\\s*[:.,-]?\\s*`,
+      "i",
+    );
+
+    let title = rawTitle.trim();
+    let volPrefix = "";
+    const volMatch = title.match(volRegex);
+    if (volMatch) {
+      volPrefix = volMatch[1] ?? "";
+      title = title.slice(volMatch[0].length).trim();
+    }
+    title = title.replace(chapterRegex, "").trim();
+
+    if (volPrefix.length > 0) {
+      return title.length > 0 ? `${volPrefix} - ${title}` : volPrefix;
+    }
+    return title;
   }
 
   async getChapterDetails(chapter: Chapter): Promise<ChapterDetails> {
