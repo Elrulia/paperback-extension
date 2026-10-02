@@ -2,6 +2,7 @@ import { CloudflareError, PaperbackInterceptor } from "@paperback/types";
 import type { Request as PaperbackRequest, Response as PaperbackResponse } from "@paperback/types";
 
 export const GRAPHQL_URL = "https://api.mghcdn.com/graphql";
+export const CHAPTER_CRYPTO_PATH = "/api/chapter-crypto";
 
 export const SOURCE_UNREACHABLE_MESSAGE =
   "MangaHub is unreachable right now. The site may be down or blocking requests — please try again later.";
@@ -24,13 +25,24 @@ export async function scheduleRequestSafely(
 }
 
 export class MangaHubInterceptor extends PaperbackInterceptor {
+  // Plain fields + constructor assignment instead of TS parameter-property
+  // shorthand: Node's type-stripping test runner (unlike the paperback-cli
+  // bundler) can't parse that syntax, and this file is reachable from
+  // chapterCrypto.test.ts via chapterCrypto.ts's import of scheduleRequestSafely.
+  private readonly getBaseUrl: () => string;
+  private readonly getAccessKey: () => string;
+  private readonly getUserAgent: () => string;
+
   constructor(
     id: string,
-    private readonly getBaseUrl: () => string,
-    private readonly getAccessKey: () => string,
-    private readonly getUserAgent: () => string,
+    getBaseUrl: () => string,
+    getAccessKey: () => string,
+    getUserAgent: () => string,
   ) {
     super(id);
+    this.getBaseUrl = getBaseUrl;
+    this.getAccessKey = getAccessKey;
+    this.getUserAgent = getUserAgent;
   }
 
   override async interceptRequest(request: PaperbackRequest): Promise<PaperbackRequest> {
@@ -49,6 +61,8 @@ export class MangaHubInterceptor extends PaperbackInterceptor {
       headers["accept"] = "application/json";
       const key = this.getAccessKey();
       if (key) headers["x-mhub-access"] = key;
+    } else if (request.url.includes(CHAPTER_CRYPTO_PATH)) {
+      headers["accept"] = "application/json";
     } else {
       headers["accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
     }

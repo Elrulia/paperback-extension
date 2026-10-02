@@ -33,6 +33,14 @@ import {
   getCachedCoverUrl,
   resolveAniListCoverUrl,
 } from "./anilist";
+import {
+  decryptChapterPages,
+  ENCRYPTED_PAGES_PREFIX,
+  fetchChapterCryptoKey,
+  isChapterCryptoKeyFresh,
+  parseEncryptedPagesEnvelope,
+  type ChapterCryptoKey,
+} from "./chapterCrypto";
 import { stripRedundantChapterPrefix } from "./chapterTitle";
 import {
   GRAPHQL_URL,
@@ -184,6 +192,7 @@ export class MangaHubExtension implements MangaHubImplementation {
   private accessKey = "";
   private currentUserAgent = "";
   private homeCache: MangaHubGqlResponse["data"] | null = null;
+  private cryptoKey: ChapterCryptoKey | null = null;
 
   get baseUrl(): string {
     return getBaseUrlOverride(this.sourceName) ?? this.defaultBaseUrl;
@@ -298,7 +307,10 @@ export class MangaHubExtension implements MangaHubImplementation {
 
     if (!errorText) return result;
 
-    if (/rate\s*limit|api\s*key/.test(errorText)) {
+    // MangaHub's own frontend treats "Chapter encryption unavailable" exactly
+    // like a rate limit / key quota error — it forces the same key-refresh
+    // reload rather than treating it as a distinct failure.
+    if (/rate\s*limit|api\s*key|encryption unavailable/.test(errorText)) {
       await this.refreshAccessKey(mangaSlug);
       throw new Error("MangaHub rate limit reached. Please try again. Can take a few retries.");
     }
@@ -824,7 +836,7 @@ export class MangaHubExtension implements MangaHubImplementation {
       try {
         const result = await this.graphQL(gql, slug);
         const pagesField = result.data?.chapter?.pages;
-        const pages = pagesField ? this.parsePageUrls(pagesField) : [];
+        const pages = pagesField ? await this.resolvePageUrls(pagesField) : [];
         return { id: chapter.chapterId, mangaId: chapter.sourceManga.mangaId, pages };
       } catch (err) {
         const isRateLimit = /rate.?limit|api.?key/i.test(
@@ -978,6 +990,29 @@ export class MangaHubExtension implements MangaHubImplementation {
       }
     }
     return [...new Set(candidates)];
+  }
+
+  private async getChapterCryptoKey(forceRefresh = false): Promise<ChapterCryptoKey> {
+    if (!forceRefresh && isChapterCryptoKeyFresh(this.cryptoKey)) return this.cryptoKey;
+    const key = await fetchChapterCryptoKey(this.baseUrl);
+    this.cryptoKey = key;
+    return key;
+  }
+
+  // MangaHub now sends chapter pages AES-256-GCM encrypted
+  // (`enc:v1:<keyId>:<iv>:<authTag>:<ciphertext>`); the decryption key comes
+  // from MangaHub's own site, separately from the GraphQL API, and rotates
+  // periodically — hence the keyId check and one forced refetch if it's gone
+  // stale since our last fetch.
+  private async resolvePageUrls(pagesField: string): Promise<string[]> {
+    if (!pagesField.startsWith(ENCRYPTED_PAGES_PREFIX)) return this.parsePageUrls(pagesField);
+
+    const envelope = parseEncryptedPagesEnvelope(pagesField);
+    let key = await this.getChapterCryptoKey();
+    if (envelope && key.keyId !== envelope.keyId) key = await this.getChapterCryptoKey(true);
+
+    const decrypted = await decryptChapterPages(pagesField, key);
+    return this.parsePageUrls(decrypted);
   }
 
   private parsePageUrls(pagesJson: string): string[] {
