@@ -69,7 +69,8 @@ export async function fetchChapterCryptoKey(baseUrl: string): Promise<ChapterCry
   return {
     keyId: json.keyId,
     keyBytes: base64UrlToArrayBuffer(json.key),
-    expiresAt: typeof json.expiresAt === "number" ? json.expiresAt : Date.now() + DEFAULT_KEY_TTL_MS,
+    expiresAt:
+      typeof json.expiresAt === "number" ? json.expiresAt : Date.now() + DEFAULT_KEY_TTL_MS,
   };
 }
 
@@ -95,7 +96,13 @@ export async function decryptChapterPages(encoded: string, key: ChapterCryptoKey
   combined.set(new Uint8Array(ciphertext), 0);
   combined.set(new Uint8Array(authTag), ciphertext.byteLength);
 
-  const cryptoKey = await crypto.subtle.importKey("raw", key.keyBytes, { name: "AES-GCM" }, false, ["decrypt"]);
-  const plainBuf = await crypto.subtle.decrypt({ name: "AES-GCM", iv, tagLength: 128 }, cryptoKey, combined.buffer);
+  const cryptoKey = await crypto.subtle.importKey("raw", key.keyBytes, { name: "AES-GCM" }, false, [
+    "decrypt",
+  ]);
+  const plainBuf = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv, tagLength: 128 },
+    cryptoKey,
+    combined.buffer,
+  );
   return Application.arrayBufferToUTF8String(plainBuf);
 }
