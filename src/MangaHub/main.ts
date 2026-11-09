@@ -43,7 +43,7 @@ import {
 } from "./chapterCrypto";
 import { stripRedundantChapterPrefix } from "./chapterTitle";
 import {
-  GRAPHQL_URL,
+  GRAPHQL_PATH,
   MangaHubInterceptor,
   scheduleRequestSafely,
   SOURCE_UNREACHABLE_MESSAGE,
@@ -331,7 +331,7 @@ export class MangaHubExtension implements MangaHubImplementation {
 
   private async postGraphQL(query: string): Promise<MangaHubGqlResponse> {
     const [response, data] = await scheduleRequestSafely({
-      url: GRAPHQL_URL,
+      url: `${this.baseUrl}${GRAPHQL_PATH}`,
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ query }),

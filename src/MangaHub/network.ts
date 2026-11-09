@@ -1,7 +1,11 @@
 import { CloudflareError, PaperbackInterceptor } from "@paperback/types";
 import type { Request as PaperbackRequest, Response as PaperbackResponse } from "@paperback/types";
 
-export const GRAPHQL_URL = "https://api.mghcdn.com/graphql";
+// api.mghcdn.com started rejecting third-party requests in November 2026
+// ("This app does not have permission to access the website content"); the
+// GraphQL API now only answers on the site's own origin, same as the
+// chapter-crypto endpoint below.
+export const GRAPHQL_PATH = "/graphql";
 export const CHAPTER_CRYPTO_PATH = "/api/chapter-crypto";
 
 export const SOURCE_UNREACHABLE_MESSAGE =
@@ -56,7 +60,7 @@ export class MangaHubInterceptor extends PaperbackInterceptor {
       "accept-language": "en-US,en;q=0.5",
     };
 
-    if (request.url.startsWith(GRAPHQL_URL)) {
+    if (request.url.includes(GRAPHQL_PATH)) {
       headers["content-type"] = "application/json";
       headers["accept"] = "application/json";
       const key = this.getAccessKey();
